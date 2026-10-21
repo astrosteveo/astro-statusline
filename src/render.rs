@@ -15,6 +15,7 @@ pub enum Color {
     Green,
     Yellow,
     Blue,
+    Magenta,
     Cyan,
     Dim,
 }
@@ -26,6 +27,7 @@ impl Color {
             Color::Green => "32",
             Color::Yellow => "33",
             Color::Blue => "34",
+            Color::Magenta => "35",
             Color::Cyan => "36",
             Color::Dim => "2",
         }

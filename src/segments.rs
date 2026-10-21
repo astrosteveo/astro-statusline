@@ -1,6 +1,7 @@
 //! The segments of the status line, in display order. Each is left out when the session lacks
 //! its data.
 
+use crate::git;
 use crate::render::{Color, Segment};
 use crate::session::Session;
 
@@ -8,6 +9,7 @@ pub fn all(session: &Session) -> Vec<Segment> {
     [
         model(session),
         directory(session),
+        branch(session),
         context(session),
         five_hour_limit(session),
         seven_day_limit(session),
@@ -26,6 +28,11 @@ fn model(session: &Session) -> Option<Segment> {
 fn directory(session: &Session) -> Option<Segment> {
     let name = session.current_dir()?.file_name()?.to_string_lossy();
     Some(Segment::new(name, Color::Blue, 80))
+}
+
+fn branch(session: &Session) -> Option<Segment> {
+    let branch = git::head(session.current_dir()?)?;
+    Some(Segment::new(branch, Color::Magenta, 70))
 }
 
 fn context(session: &Session) -> Option<Segment> {
