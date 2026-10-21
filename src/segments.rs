@@ -79,10 +79,9 @@ pub struct Env<'a> {
     pub history: &'a [Sample],
 }
 
-/// The segments the config lists, in its order.
-pub fn all(env: &Env) -> Vec<Segment> {
-    env.config
-        .segments
+/// The segments of one row, in its order.
+pub fn row(env: &Env, kinds: &[Kind]) -> Vec<Segment> {
+    kinds
         .iter()
         .filter_map(|&kind| segment(kind, env))
         .collect()
@@ -233,6 +232,15 @@ mod tests {
     use super::*;
     use crate::style::Style;
 
+    /// Every row's segments, in order.
+    fn all(env: &Env) -> Vec<Segment> {
+        env.config
+            .rows()
+            .into_iter()
+            .flat_map(|kinds| row(env, kinds))
+            .collect()
+    }
+
     const FULL: &str = r#"{
         "model": {"id": "claude-opus-5-5", "display_name": "Opus"},
         "workspace": {"current_dir": "/home/me/proj", "project_dir": "/home/me/proj"},
@@ -288,7 +296,7 @@ mod tests {
         };
         *field = Template::parse(template, kind.placeholders()).unwrap();
         Config {
-            segments: vec![kind],
+            segments: Some(vec![kind]),
             format,
             ..Config::default()
         }
@@ -311,7 +319,7 @@ mod tests {
     #[test]
     fn follows_the_configured_order_and_colors() {
         let config = Config {
-            segments: vec![Kind::Cost, Kind::Context, Kind::Model],
+            segments: Some(vec![Kind::Cost, Kind::Context, Kind::Model]),
             colors: Colors {
                 model: style("bold #ff8700"),
                 usage_low: style("bright_green"),

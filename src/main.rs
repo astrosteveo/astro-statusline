@@ -56,17 +56,23 @@ fn main() {
         now,
         history: &history,
     };
-    let line = render::render(
-        segments::all(&env),
-        &config.format.separator,
-        &config.colors.separator,
-        max_width(),
-        color_enabled(),
-    );
+    let (max_width, color) = (max_width(), color_enabled());
+    // Claude Code shows each line as a row. A row with nothing to show is left out, so rows appear
+    // as their data arrives.
+    let lines: Vec<String> = config
+        .rows()
+        .into_iter()
+        .map(|kinds| {
+            let segments = segments::row(&env, kinds);
+            let (separator, style) = (&config.format.separator, &config.colors.separator);
+            render::render(segments, separator, style, max_width, color)
+        })
+        .filter(|line| !line.is_empty())
+        .collect();
 
-    // Claude Code shows only stdout, and only after a zero exit, so a failed write has nowhere
-    // useful to go.
-    let _ = writeln!(io::stdout().lock(), "{line}");
+    // With every row empty this prints one empty line, which clears the status line. Claude Code
+    // shows only stdout, and only after a zero exit, so a failed write has nowhere useful to go.
+    let _ = writeln!(io::stdout().lock(), "{}", lines.join("\n"));
 }
 
 /// Seconds since the Unix epoch, or `None` if the clock is set before it.

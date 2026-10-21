@@ -16,11 +16,13 @@ use crate::segments::Kind;
 use crate::style::Style;
 use crate::template::Template;
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
-    /// The segments to show, left to right.
-    pub segments: Vec<Kind>,
+    /// One row of segments, left to right.
+    pub segments: Option<Vec<Kind>>,
+    /// Several rows, each a list of segments, top to bottom. Set this or `segments`, not both.
+    pub lines: Option<Vec<Vec<Kind>>>,
     pub colors: Colors,
     pub format: Format,
     pub bar: Bar,
@@ -94,10 +96,20 @@ pub struct Graph {
 }
 
 impl Config {
+    /// The rows of segments to show, top to bottom. With neither `segments` nor `lines` set, that's
+    /// every segment on one row.
+    pub fn rows(&self) -> Vec<&[Kind]> {
+        match (&self.segments, &self.lines) {
+            (Some(segments), _) => vec![segments],
+            (None, Some(lines)) => lines.iter().map(Vec::as_slice).collect(),
+            (None, None) => vec![&Kind::ALL],
+        }
+    }
+
     /// Whether any segment shown needs the session's history: for a graph, or for the context
     /// segment's fill prediction.
     pub fn needs_history(&self) -> bool {
-        self.segments.iter().any(|&kind| {
+        self.rows().into_iter().flatten().any(|&kind| {
             let template = self.format.template(kind);
             template.uses("graph") || (kind == Kind::Context && template.uses("eta"))
         })
@@ -115,18 +127,6 @@ impl Format {
             Kind::FiveHour => &self.five_hour,
             Kind::SevenDay => &self.seven_day,
             Kind::Cost => &self.cost,
-        }
-    }
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Config {
-            segments: Kind::ALL.to_vec(),
-            colors: Colors::default(),
-            format: Format::default(),
-            bar: Bar::default(),
-            graph: Graph::default(),
         }
     }
 }
@@ -277,19 +277,23 @@ fn read(path: &Path) -> Result<Config, String> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Config::default()),
         Err(error) => return Err(format!("{}: {error}", path.display())),
     };
-    toml::from_str(&text).map_err(|error| {
-        // A parse error ends in a newline.
-        format!("{}: {}", path.display(), error.to_string().trim_end())
-    })
+    parse(&text).map_err(|error| format!("{}: {error}", path.display()))
+}
+
+/// Parses the text of a config file.
+fn parse(text: &str) -> Result<Config, String> {
+    // A parse error ends in a newline.
+    let config: Config =
+        toml::from_str(text).map_err(|error| error.to_string().trim_end().to_string())?;
+    if config.segments.is_some() && config.lines.is_some() {
+        return Err("set segments or lines, not both".to_string());
+    }
+    Ok(config)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn parse(text: &str) -> Result<Config, String> {
-        toml::from_str(text).map_err(|error| error.to_string())
-    }
 
     fn style(text: &str) -> Style {
         text.parse().unwrap()
@@ -329,7 +333,15 @@ mod tests {
             width = 8
             chars = "▁▂▃▄▅▆▇█"
         "##;
-        assert_eq!(parse(documented).unwrap(), Config::default());
+        let documented = parse(documented).unwrap();
+        assert_eq!(documented.rows(), Config::default().rows());
+        assert_eq!(
+            Config {
+                segments: None,
+                ..documented
+            },
+            Config::default()
+        );
         assert_eq!(parse("").unwrap(), Config::default());
     }
 
@@ -342,14 +354,36 @@ mod tests {
             "##,
         )
         .unwrap();
-        assert_eq!(config.segments, [Kind::Context, Kind::Model]);
+        assert_eq!(config.rows(), [[Kind::Context, Kind::Model]]);
         assert_eq!(config.colors.model, style("bold #ff8700"));
         assert_eq!(config.colors.branch, style("magenta"));
-        assert_eq!(parse("segments = []").unwrap().segments, []);
+        assert_eq!(parse("segments = []").unwrap().rows(), [&[]]);
         assert_eq!(
             parse("format.separator = \"\"").unwrap().format.separator,
             ""
         );
+    }
+
+    #[test]
+    fn lays_segments_out_in_rows() {
+        assert_eq!(Config::default().rows(), [Kind::ALL]);
+        let config = parse("lines = [[\"model\", \"branch\"], [], [\"cost\"]]").unwrap();
+        assert_eq!(
+            config.rows(),
+            [&[Kind::Model, Kind::Branch][..], &[], &[Kind::Cost]]
+        );
+        assert_eq!(parse("lines = []").unwrap().rows(), Vec::<&[Kind]>::new());
+        assert_eq!(
+            parse("segments = [\"model\"]\nlines = [[\"cost\"]]").unwrap_err(),
+            "set segments or lines, not both"
+        );
+        assert!(
+            parse("lines = [\"model\"]")
+                .unwrap_err()
+                .contains("invalid type")
+        );
+        let graph_below = "lines = [[\"model\"], [\"cost\"]]\nformat.cost = \"{graph}\"";
+        assert!(parse(graph_below).unwrap().needs_history());
     }
 
     #[test]

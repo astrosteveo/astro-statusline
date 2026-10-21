@@ -170,6 +170,7 @@ fn an_invalid_config_falls_back_to_the_defaults() {
         "colors.model = \"purple\"",
         "[colors",
         "format.model = \"{nope}\"",
+        "segments = [\"model\"]\nlines = [[\"model\"]]",
     ] {
         let out = run_with_config(Some(config), input, &[("NO_COLOR", "1")]);
         assert_eq!(out.stdout, "Opus │ proj\n", "{config}");
@@ -345,4 +346,35 @@ fn predicts_the_context_filling_from_recent_history() {
     // A session with no history yet has no rate to go on.
     let out = run_with_config(Some(config), context_update("new", 60).as_bytes(), &env);
     assert_eq!(out.stdout, "ctx 60%\n");
+}
+
+#[test]
+fn draws_one_line_per_row_and_fits_each() {
+    let config = r#"lines = [["model"], ["context", "cost"]]"#;
+    let full = br#"{
+        "model": {"display_name": "Opus"},
+        "context_window": {"used_percentage": 63},
+        "cost": {"total_cost_usd": 1.5}
+    }"#;
+    let draw = |input: &[u8], env: &[(&str, &str)]| {
+        let mut env = env.to_vec();
+        env.push(("NO_COLOR", "1"));
+        run_with_config(Some(config), input, &env).stdout
+    };
+    assert_eq!(draw(full, &[]), "Opus\nctx 63% │ $1.50\n");
+    // 14 columns leave 10: room for the model, and for the context but not the cost.
+    assert_eq!(draw(full, &[("COLUMNS", "14")]), "Opus\nctx 63%\n");
+    // A row with nothing to show is left out, and with nothing at all, one empty line clears
+    // the status line.
+    assert_eq!(
+        draw(br#"{"model": {"display_name": "Opus"}}"#, &[]),
+        "Opus\n"
+    );
+    assert_eq!(
+        draw(br#"{"cost": {"total_cost_usd": 1.5}}"#, &[]),
+        "$1.50\n"
+    );
+    assert_eq!(draw(b"{}", &[]), "\n");
+    let out = run_with_config(Some("lines = []"), full, &[]);
+    assert_eq!(out.stdout, "\n");
 }
