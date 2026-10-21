@@ -1,11 +1,14 @@
+mod config;
 mod git;
 mod render;
 mod segments;
 mod session;
+mod style;
 
 use std::env;
 use std::io::{self, Read, Write};
 
+use config::Config;
 use session::Session;
 
 /// Claude Code draws the status line two columns in from each edge (measured in fullscreen
@@ -19,7 +22,14 @@ fn main() {
     let _ = io::stdin().read_to_end(&mut input);
     let session = Session::parse(&input);
 
-    let line = render::render(segments::all(&session), max_width(), color_enabled());
+    let config = Config::default();
+
+    let line = render::render(
+        segments::all(&session, &config),
+        &config.colors.separator,
+        max_width(),
+        color_enabled(),
+    );
 
     // Claude Code shows only stdout, and only after a zero exit, so a failed write has nowhere
     // useful to go.

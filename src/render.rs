@@ -6,55 +6,37 @@
 
 use unicode_width::UnicodeWidthStr;
 
+use crate::style::Style;
+
 const SEPARATOR: &str = " │ ";
 const RESET: &str = "\x1b[0m";
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Color {
-    Red,
-    Green,
-    Yellow,
-    Blue,
-    Magenta,
-    Cyan,
-    Dim,
-}
-
-impl Color {
-    fn sgr(self) -> &'static str {
-        match self {
-            Color::Red => "31",
-            Color::Green => "32",
-            Color::Yellow => "33",
-            Color::Blue => "34",
-            Color::Magenta => "35",
-            Color::Cyan => "36",
-            Color::Dim => "2",
-        }
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Segment {
     pub text: String,
-    pub color: Color,
+    pub style: Style,
     /// When the line is too wide, lower priorities are dropped first.
     pub priority: u8,
 }
 
 impl Segment {
-    pub fn new(text: impl Into<String>, color: Color, priority: u8) -> Self {
+    pub fn new(text: impl Into<String>, style: Style, priority: u8) -> Self {
         Segment {
             text: text.into(),
-            color,
+            style,
             priority,
         }
     }
 }
 
-/// Renders `segments` in order, no wider than `max_width` columns when it is given, with ANSI
-/// color when `color` is set.
-pub fn render(segments: Vec<Segment>, max_width: Option<usize>, color: bool) -> String {
+/// Renders `segments` in order, joined by a separator drawn in `separator`, no wider than
+/// `max_width` columns when it is given, with ANSI color when `color` is set.
+pub fn render(
+    segments: Vec<Segment>,
+    separator: &Style,
+    max_width: Option<usize>,
+    color: bool,
+) -> String {
     let mut segments: Vec<Segment> = segments
         .into_iter()
         .map(|s| Segment {
@@ -67,10 +49,10 @@ pub fn render(segments: Vec<Segment>, max_width: Option<usize>, color: bool) -> 
         fit(&mut segments, max_width);
     }
 
-    let separator = paint(SEPARATOR, Color::Dim, color);
+    let separator = paint(SEPARATOR, separator, color);
     segments
         .iter()
-        .map(|s| paint(&s.text, s.color, color))
+        .map(|s| paint(&s.text, &s.style, color))
         .collect::<Vec<_>>()
         .join(&separator)
 }
@@ -117,11 +99,10 @@ fn truncate(text: &str, max_width: usize) -> String {
     out
 }
 
-fn paint(text: &str, color: Color, enabled: bool) -> String {
-    if enabled {
-        format!("\x1b[{}m{text}{RESET}", color.sgr())
-    } else {
-        text.to_string()
+fn paint(text: &str, style: &Style, enabled: bool) -> String {
+    match style.escape() {
+        Some(escape) if enabled => format!("{escape}{text}{RESET}"),
+        _ => text.to_string(),
     }
 }
 
@@ -129,8 +110,16 @@ fn paint(text: &str, color: Color, enabled: bool) -> String {
 mod tests {
     use super::*;
 
+    fn style(text: &str) -> Style {
+        text.parse().unwrap()
+    }
+
     fn seg(text: &str, priority: u8) -> Segment {
-        Segment::new(text, Color::Cyan, priority)
+        Segment::new(text, style("cyan"), priority)
+    }
+
+    fn render(segments: Vec<Segment>, max_width: Option<usize>, color: bool) -> String {
+        super::render(segments, &style("dim"), max_width, color)
     }
 
     #[test]
@@ -142,7 +131,7 @@ mod tests {
     #[test]
     fn closes_every_color_it_opens() {
         let line = render(
-            vec![seg("Opus", 1), Segment::new("proj", Color::Blue, 2)],
+            vec![seg("Opus", 1), Segment::new("proj", style("blue"), 2)],
             None,
             true,
         );
@@ -150,6 +139,13 @@ mod tests {
             line,
             "\x1b[36mOpus\x1b[0m\x1b[2m │ \x1b[0m\x1b[34mproj\x1b[0m"
         );
+    }
+
+    #[test]
+    fn leaves_plain_styles_unescaped() {
+        let segments = vec![Segment::new("Opus", style(""), 1), seg("proj", 2)];
+        let line = super::render(segments, &style(""), None, true);
+        assert_eq!(line, "Opus │ \x1b[36mproj\x1b[0m");
     }
 
     #[test]
