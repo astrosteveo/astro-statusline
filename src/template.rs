@@ -102,6 +102,15 @@ impl Template {
         Ok(Template(parts))
     }
 
+    /// Whether the template has a `{name}` placeholder anywhere.
+    pub fn uses(&self, name: &str) -> bool {
+        let is = |piece: &Piece| matches!(piece, Piece::Value(value) if value == name);
+        self.0.iter().any(|part| match part {
+            Part::Piece(piece) => is(piece),
+            Part::Group(pieces) => pieces.iter().any(is),
+        })
+    }
+
     /// Fills the template with `value(name)` for each placeholder. `None` when a placeholder
     /// outside any group has no value. An empty value counts as none.
     pub fn render(&self, value: impl Fn(&str) -> Option<String>) -> Option<String> {
@@ -228,6 +237,13 @@ mod tests {
         // The literal brackets belong to the group, so they go with it.
         assert_eq!(render("ctx[[[{x}]]]", &[]).as_deref(), Some("ctx"));
         assert_eq!(render("[{x}]]]", &[("x", "a")]).as_deref(), Some("a]"));
+    }
+
+    #[test]
+    fn knows_which_placeholders_it_uses() {
+        let template = Template::parse("{x}[ {eta}] {{resets_in}}", ALLOWED).unwrap();
+        assert!(template.uses("x") && template.uses("eta"));
+        assert!(!template.uses("resets_in"));
     }
 
     #[test]

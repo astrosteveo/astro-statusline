@@ -2,16 +2,16 @@
 //! `config.toml` in the user's config directory. Every key is optional and falls back to the
 //! default.
 
-use std::env;
-use std::ffi::OsString;
 use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serde::Deserialize;
 use serde::de::{self, Deserializer};
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+use crate::dirs;
+use crate::history;
 use crate::segments::Kind;
 use crate::style::Style;
 use crate::template::Template;
@@ -24,6 +24,7 @@ pub struct Config {
     pub colors: Colors,
     pub format: Format,
     pub bar: Bar,
+    pub graph: Graph,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -80,6 +81,42 @@ pub struct Bar {
     pub empty: String,
 }
 
+/// How `{graph}` is drawn.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Graph {
+    /// The most recent samples shown, one cell each, from 1 to 64.
+    #[serde(deserialize_with = "graph_width")]
+    pub width: u8,
+    /// The cells from lowest to highest, each one column wide.
+    #[serde(deserialize_with = "graph_chars")]
+    pub chars: Vec<char>,
+}
+
+impl Config {
+    /// Whether any segment shown needs the session's history.
+    pub fn needs_history(&self) -> bool {
+        self.segments
+            .iter()
+            .any(|&kind| self.format.template(kind).uses("graph"))
+    }
+}
+
+impl Format {
+    /// The template for `kind`.
+    pub fn template(&self, kind: Kind) -> &Template {
+        match kind {
+            Kind::Model => &self.model,
+            Kind::Directory => &self.directory,
+            Kind::Branch => &self.branch,
+            Kind::Context => &self.context,
+            Kind::FiveHour => &self.five_hour,
+            Kind::SevenDay => &self.seven_day,
+            Kind::Cost => &self.cost,
+        }
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
         Config {
@@ -87,8 +124,43 @@ impl Default for Config {
             colors: Colors::default(),
             format: Format::default(),
             bar: Bar::default(),
+            graph: Graph::default(),
         }
     }
+}
+
+impl Default for Graph {
+    fn default() -> Self {
+        Graph {
+            width: 8,
+            chars: "▁▂▃▄▅▆▇█".chars().collect(),
+        }
+    }
+}
+
+fn graph_width<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u8, D::Error> {
+    let width = u64::deserialize(deserializer)?;
+    u8::try_from(width)
+        .ok()
+        .filter(|width| (1..=history::MAX_SAMPLES as u8).contains(width))
+        .ok_or_else(|| {
+            de::Error::custom(format!(
+                "graph width {width} isn't from 1 to {}",
+                history::MAX_SAMPLES
+            ))
+        })
+}
+
+fn graph_chars<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<char>, D::Error> {
+    let text = String::deserialize(deserializer)?;
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() < 2 || chars.iter().any(|&c| c.width() != Some(1)) {
+        return Err(de::Error::custom(format!(
+            "graph chars {text:?} must be 2 or more characters, each one column wide, such as \
+             \"▁▂▃▄▅▆▇█\""
+        )));
+    }
+    Ok(chars)
 }
 
 impl Default for Bar {
@@ -191,23 +263,10 @@ impl Default for Colors {
 /// Reads the config file, or the defaults when there is none. An error names the file and what
 /// is wrong with it.
 pub fn load() -> Result<Config, String> {
-    path_from(env::var_os("XDG_CONFIG_HOME"), env::home_dir())
-        .map_or_else(|| Ok(Config::default()), |path| read(&path))
-}
-
-/// `$XDG_CONFIG_HOME/astro-statusline/config.toml`, or `~/.config/astro-statusline/config.toml`
-/// when `XDG_CONFIG_HOME` is unset.
-fn path_from(xdg_config_home: Option<OsString>, home: Option<PathBuf>) -> Option<PathBuf> {
-    // The XDG spec says to ignore a relative path, which would otherwise resolve against
-    // whatever directory Claude Code runs the command in.
-    let base = xdg_config_home
-        .map(PathBuf::from)
-        .filter(|base| base.is_absolute())
-        .or_else(|| {
-            home.filter(|home| home.is_absolute())
-                .map(|home| home.join(".config"))
-        })?;
-    Some(base.join("astro-statusline").join("config.toml"))
+    dirs::config().map_or_else(
+        || Ok(Config::default()),
+        |dir| read(&dir.join("config.toml")),
+    )
 }
 
 fn read(path: &Path) -> Result<Config, String> {
@@ -263,6 +322,10 @@ mod tests {
             width = 10
             full = "█"
             empty = "░"
+
+            [graph]
+            width = 8
+            chars = "▁▂▃▄▅▆▇█"
         "##;
         assert_eq!(parse(documented).unwrap(), Config::default());
         assert_eq!(parse("").unwrap(), Config::default());
@@ -319,11 +382,28 @@ mod tests {
             ("bar.full = \"==\"", "isn't one column wide"),
             ("bar.full = \"日\"", "isn't one column wide"),
             ("bar.empty = \"\\t\"", "isn't one column wide"),
+            ("graph.width = 0", "graph width 0 isn't from 1 to 64"),
+            ("graph.width = 65", "graph width 65 isn't from 1 to 64"),
+            ("graph.chars = \"#\"", "must be 2 or more characters"),
+            ("graph.chars = \"a\\nb\"", "must be 2 or more characters"),
+            ("graph.chars = \"日本\"", "must be 2 or more characters"),
         ];
         for (text, expected) in cases {
             let error = parse(text).unwrap_err();
             assert!(error.contains(expected), "{text}: {error}");
         }
+    }
+
+    #[test]
+    fn needs_history_only_for_a_graph_that_is_shown() {
+        assert!(!Config::default().needs_history());
+        assert!(
+            parse("format.cost = \"{usd} {graph}\"")
+                .unwrap()
+                .needs_history()
+        );
+        let hidden = "segments = [\"model\"]\nformat.cost = \"{usd} {graph}\"";
+        assert!(!parse(hidden).unwrap().needs_history());
     }
 
     #[test]
@@ -353,26 +433,5 @@ mod tests {
             error.starts_with(&format!("{}: ", dir.path().display())),
             "{error}"
         );
-    }
-
-    #[test]
-    fn finds_the_file_under_xdg_config_home_or_home() {
-        let path = |xdg: Option<&str>, home: Option<&str>| {
-            path_from(xdg.map(OsString::from), home.map(PathBuf::from))
-        };
-        let expected = |base: &str| Some(Path::new(base).join("astro-statusline/config.toml"));
-
-        assert_eq!(path(Some("/xdg"), Some("/home/me")), expected("/xdg"));
-        assert_eq!(path(None, Some("/home/me")), expected("/home/me/.config"));
-        assert_eq!(
-            path(Some(""), Some("/home/me")),
-            expected("/home/me/.config")
-        );
-        assert_eq!(
-            path(Some("relative"), Some("/home/me")),
-            expected("/home/me/.config")
-        );
-        assert_eq!(path(None, Some("")), None);
-        assert_eq!(path(None, None), None);
     }
 }

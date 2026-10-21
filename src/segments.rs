@@ -5,7 +5,8 @@ use serde::Deserialize;
 
 use crate::config::{Colors, Config};
 use crate::git;
-use crate::graph;
+use crate::graph::{self, Scale};
+use crate::history::Sample;
 use crate::predict;
 use crate::render::Segment;
 use crate::session::{RateLimit, Session};
@@ -44,9 +45,11 @@ impl Kind {
         match self {
             Kind::Model | Kind::Directory => &["name"],
             Kind::Branch => &["branch"],
-            Kind::Context => &["percent", "bar", "tokens", "size"],
-            Kind::FiveHour | Kind::SevenDay => &["percent", "bar", "resets_in", "projected", "eta"],
-            Kind::Cost => &["usd", "rate"],
+            Kind::Context => &["percent", "bar", "graph", "tokens", "size"],
+            Kind::FiveHour | Kind::SevenDay => {
+                &["percent", "bar", "graph", "resets_in", "projected", "eta"]
+            }
+            Kind::Cost => &["usd", "rate", "graph"],
         }
     }
 
@@ -71,6 +74,9 @@ pub struct Env<'a> {
     /// Seconds since the Unix epoch, or `None` when the clock can't say, which leaves out
     /// everything measured from now.
     pub now: Option<i64>,
+    /// The session's recent samples, oldest first, ending with the current values. Empty when
+    /// no segment shown needs them.
+    pub history: &'a [Sample],
 }
 
 /// The segments the config lists, in its order.
@@ -116,6 +122,7 @@ fn segment(kind: Kind, env: &Env) -> Option<Segment> {
             let text = format.context.render(|key| match key {
                 "percent" => Some(percent(used)),
                 "bar" => graph::bar(used, &config.bar),
+                "graph" => graph(env, |s| s.context, Scale::Percent),
                 "tokens" => window.total_input_tokens.map(units::tokens),
                 "size" => window.context_window_size.map(units::tokens),
                 _ => None,
@@ -124,11 +131,23 @@ fn segment(kind: Kind, env: &Env) -> Option<Segment> {
         }
         Kind::FiveHour => {
             let limit = session.rate_limits.as_ref()?.five_hour.as_ref()?;
-            rate_limit(limit, predict::FIVE_HOURS, &format.five_hour, env)?
+            rate_limit(
+                limit,
+                predict::FIVE_HOURS,
+                |s| s.five_hour,
+                &format.five_hour,
+                env,
+            )?
         }
         Kind::SevenDay => {
             let limit = session.rate_limits.as_ref()?.seven_day.as_ref()?;
-            rate_limit(limit, predict::SEVEN_DAYS, &format.seven_day, env)?
+            rate_limit(
+                limit,
+                predict::SEVEN_DAYS,
+                |s| s.seven_day,
+                &format.seven_day,
+                env,
+            )?
         }
         Kind::Cost => {
             let cost = session.cost.as_ref()?;
@@ -139,6 +158,7 @@ fn segment(kind: Kind, env: &Env) -> Option<Segment> {
                     .total_duration_ms
                     .and_then(|ms| predict::cost_rate(usd, ms))
                     .map(|rate| format!("${rate:.2}")),
+                "graph" => graph(env, |s| s.cost, Scale::Increase),
                 _ => None,
             });
             (text?, &colors.cost)
@@ -147,10 +167,11 @@ fn segment(kind: Kind, env: &Env) -> Option<Segment> {
     Some(Segment::new(text, style.clone(), kind.priority()))
 }
 
-/// A rate limit over a `window` seconds long.
+/// A rate limit over a `window` seconds long, whose history `value` picks out of each sample.
 fn rate_limit<'a>(
     limit: &RateLimit,
     window: f64,
+    value: fn(&Sample) -> Option<f64>,
     template: &Template,
     env: &Env<'a>,
 ) -> Option<(String, &'a Style)> {
@@ -161,6 +182,7 @@ fn rate_limit<'a>(
     let text = template.render(|key| match key {
         "percent" => Some(percent(used)),
         "bar" => graph::bar(used, &env.config.bar),
+        "graph" => graph(env, value, Scale::Percent),
         "resets_in" => now_and_reset
             .and_then(|(now, resets_at)| predict::resets_in(resets_at, now, window))
             .map(seconds),
@@ -173,6 +195,12 @@ fn rate_limit<'a>(
         _ => None,
     })?;
     Some((text, usage_style(used, &env.config.colors)))
+}
+
+/// A graph of `value` across the session's history, skipping samples without it.
+fn graph(env: &Env, value: fn(&Sample) -> Option<f64>, scale: Scale) -> Option<String> {
+    let values: Vec<f64> = env.history.iter().filter_map(value).collect();
+    graph::sparkline(&values, scale, &env.config.graph)
 }
 
 /// A duration in seconds, which callers have checked is a finite number not below zero.
@@ -221,10 +249,12 @@ mod tests {
 
     fn draw(input: &str, config: &Config) -> Vec<Segment> {
         let session = Session::parse(input.as_bytes());
+        // The history always ends with the current values, as it does when the binary runs.
         all(&Env {
             session: &session,
             config,
             now: Some(NOW),
+            history: &[Sample::new(&session, NOW)],
         })
     }
 
@@ -379,6 +409,7 @@ mod tests {
                 session: &session,
                 config: &config,
                 now,
+                history: &[],
             })
             .pop()
             .map(|s| s.text)
@@ -393,6 +424,31 @@ mod tests {
             text_with(Kind::FiveHour, "{percent}[ {resets_in}][ {eta}]", no_reset).as_deref(),
             Some("90%")
         );
+    }
+
+    #[test]
+    fn graphs_the_session_history() {
+        let config = with_template(Kind::Context, "{percent} {graph}");
+        let session = Session::parse(br#"{"context_window": {"used_percentage": 80}}"#);
+        let history = [
+            Sample {
+                context: Some(10.0),
+                ..Sample::default()
+            },
+            // An update without a context value, as right after /compact.
+            Sample::default(),
+            Sample {
+                context: Some(80.0),
+                ..Sample::default()
+            },
+        ];
+        let segments = all(&Env {
+            session: &session,
+            config: &config,
+            now: Some(NOW),
+            history: &history,
+        });
+        assert_eq!(segments[0].text, "80% ▁▇");
     }
 
     #[test]

@@ -15,9 +15,11 @@ fn run(stdin: &[u8], env: &[(&str, &str)]) -> Output {
     run_with_config(None, stdin, env)
 }
 
-/// Runs with `config` as the config file, or with none, but never with the user's own.
+/// Runs with `config` as the config file, or with none, but never with the user's own. History
+/// goes to a fresh state directory unless `env` names one in `XDG_STATE_HOME`.
 fn run_with_config(config: Option<&str>, stdin: &[u8], env: &[(&str, &str)]) -> Output {
     let config_home = tempfile::tempdir().expect("create a config dir");
+    let state_home = tempfile::tempdir().expect("create a state dir");
     if let Some(config) = config {
         let dir = config_home.path().join("astro-statusline");
         fs::create_dir(&dir).expect("create the config's dir");
@@ -28,6 +30,7 @@ fn run_with_config(config: Option<&str>, stdin: &[u8], env: &[(&str, &str)]) -> 
         .env_remove("COLUMNS")
         .env_remove("NO_COLOR")
         .env("XDG_CONFIG_HOME", config_home.path())
+        .env("XDG_STATE_HOME", state_home.path())
         .envs(env.iter().copied())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -227,4 +230,87 @@ fn predicts_rate_limits_from_the_clock() {
         out.stdout,
         "5h 90% resets 1h ⚠ limit in 26m │ $2.00 ($2.00/h)\n"
     );
+}
+
+const GRAPH_CONFIG: &str = r#"
+    segments = ["context"]
+    format.context = "ctx {percent} {graph}"
+"#;
+
+fn context_update(session_id: &str, used: u32) -> String {
+    format!(r#"{{"session_id": "{session_id}", "context_window": {{"used_percentage": {used}}}}}"#)
+}
+
+/// Every file under `dir`, relative to it.
+fn files_under(dir: &std::path::Path) -> Vec<String> {
+    let mut files = Vec::new();
+    let mut pending = vec![dir.to_path_buf()];
+    while let Some(next) = pending.pop() {
+        for entry in fs::read_dir(&next).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                pending.push(path);
+            } else {
+                files.push(path.strip_prefix(dir).unwrap().display().to_string());
+            }
+        }
+    }
+    files
+}
+
+#[test]
+fn graphs_values_across_runs_of_one_session() {
+    let state = tempfile::tempdir().unwrap();
+    let env = [
+        ("NO_COLOR", "1"),
+        ("XDG_STATE_HOME", state.path().to_str().unwrap()),
+    ];
+    let draw = |used| {
+        let out = run_with_config(
+            Some(GRAPH_CONFIG),
+            context_update("abc", used).as_bytes(),
+            &env,
+        );
+        assert_eq!(out.stderr, "");
+        out.stdout
+    };
+    assert_eq!(draw(10), "ctx 10% ▁\n");
+    assert_eq!(draw(60), "ctx 60% ▁▅\n");
+    let file = state.path().join("astro-statusline/sessions/abc.json");
+    let before = fs::read(&file).unwrap();
+    // A refresh with nothing new draws the same graph and leaves the file alone.
+    assert_eq!(draw(60), "ctx 60% ▁▅\n");
+    assert_eq!(fs::read(&file).unwrap(), before);
+    assert_eq!(
+        files_under(state.path()),
+        ["astro-statusline/sessions/abc.json"]
+    );
+}
+
+#[test]
+fn keeps_no_history_unless_a_graph_is_shown() {
+    let state = tempfile::tempdir().unwrap();
+    let env = [("XDG_STATE_HOME", state.path().to_str().unwrap())];
+    let input = context_update("abc", 10);
+    run_with_config(None, input.as_bytes(), &env);
+    // A graph in a segment that isn't shown doesn't count.
+    let hidden = "segments = [\"model\"]\nformat.context = \"{graph}\"";
+    run_with_config(Some(hidden), input.as_bytes(), &env);
+    assert_eq!(files_under(state.path()), Vec::<String>::new());
+}
+
+#[test]
+fn keeps_no_history_for_a_session_id_that_isnt_a_plain_name() {
+    let state = tempfile::tempdir().unwrap();
+    let env = [
+        ("NO_COLOR", "1"),
+        ("XDG_STATE_HOME", state.path().to_str().unwrap()),
+    ];
+    for id in ["../escape", "a/b", ""] {
+        let out = run_with_config(Some(GRAPH_CONFIG), context_update(id, 60).as_bytes(), &env);
+        // The graph still shows the current value.
+        assert_eq!(out.stdout, "ctx 60% ▅\n", "{id}");
+    }
+    assert_eq!(files_under(state.path()), Vec::<String>::new());
+    assert!(!state.path().join("escape.json").exists());
 }

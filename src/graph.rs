@@ -1,6 +1,6 @@
-//! Bars drawn from text cells, sized in display columns like the rest of the line.
+//! Bars and graphs drawn from text cells, each one column wide like the rest of the line.
 
-use crate::config::Bar;
+use crate::config::{Bar, Graph};
 
 /// A bar `bar.width` cells wide, with one full cell per whole step of `used` out of 100.
 /// `None` when `used` isn't a number.
@@ -12,6 +12,52 @@ pub fn bar(used: f64, bar: &Bar) -> Option<String> {
     // `as` truncates toward zero, and `used` is clamped first, so `full` is at most `width`.
     let full = (used.clamp(0.0, 100.0) / 100.0 * width as f64) as usize;
     Some(bar.full.repeat(full) + &bar.empty.repeat(width - full))
+}
+
+/// How a graph maps values onto its cells.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scale {
+    /// Percentages, from 0 for the lowest cell to 100 for the highest.
+    Percent,
+    /// Increases between samples, scaled so the largest in view reaches the highest cell. A
+    /// running total such as cost reads as how much each update added.
+    Increase,
+}
+
+/// The last `graph.width` of `values` as one cell each, oldest first. Values that aren't numbers
+/// are skipped. `None` when there is nothing to draw.
+pub fn sparkline(values: &[f64], scale: Scale, graph: &Graph) -> Option<String> {
+    let values: Vec<f64> = values.iter().copied().filter(|v| v.is_finite()).collect();
+    let top = graph.chars.len() - 1;
+    let levels: Vec<usize> = match scale {
+        Scale::Percent => values
+            .iter()
+            .map(|v| ((v.clamp(0.0, 100.0) / 100.0 * graph.chars.len() as f64) as usize).min(top))
+            .collect(),
+        Scale::Increase => {
+            // The first sample has nothing before it to increase from, so a lone sample draws one
+            // lowest cell. A drop (a new session reusing an id) counts as no increase.
+            let increases: Vec<f64> = match values.as_slice() {
+                [] => Vec::new(),
+                [_] => vec![0.0],
+                _ => values.windows(2).map(|w| (w[1] - w[0]).max(0.0)).collect(),
+            };
+            let shown = &increases[increases.len().saturating_sub(graph.width.into())..];
+            let largest = shown.iter().copied().fold(0.0, f64::max);
+            shown
+                .iter()
+                .map(|v| {
+                    if largest > 0.0 {
+                        ((v / largest * top as f64).round() as usize).min(top)
+                    } else {
+                        0
+                    }
+                })
+                .collect()
+        }
+    };
+    let shown = &levels[levels.len().saturating_sub(graph.width.into())..];
+    (!shown.is_empty()).then(|| shown.iter().map(|&level| graph.chars[level]).collect())
 }
 
 #[cfg(test)]
@@ -39,6 +85,62 @@ mod tests {
         assert_eq!(draw(1e300).as_deref(), Some("██████████"));
         assert_eq!(draw(f64::NAN), None);
         assert_eq!(draw(f64::INFINITY), None);
+    }
+
+    fn spark(values: &[f64], scale: Scale) -> Option<String> {
+        sparkline(values, scale, &Graph::default())
+    }
+
+    #[test]
+    fn graphs_percentages_on_a_fixed_scale() {
+        assert_eq!(
+            spark(
+                &[0.0, 12.5, 25.0, 37.5, 50.0, 62.5, 75.0, 87.5],
+                Scale::Percent
+            )
+            .as_deref(),
+            Some("▁▂▃▄▅▆▇█")
+        );
+        assert_eq!(spark(&[100.0], Scale::Percent).as_deref(), Some("█"));
+        assert_eq!(
+            spark(&[-5.0, 250.0, f64::NAN], Scale::Percent).as_deref(),
+            Some("▁█")
+        );
+        assert_eq!(spark(&[], Scale::Percent), None);
+        assert_eq!(spark(&[f64::INFINITY], Scale::Percent), None);
+    }
+
+    #[test]
+    fn shows_only_the_latest_values() {
+        let values: Vec<f64> = (0..20).map(|v| v as f64 * 5.0).collect();
+        assert_eq!(spark(&values, Scale::Percent).as_deref(), Some("▅▆▆▇▇▇██"));
+        let narrow = Graph {
+            width: 2,
+            chars: vec!['.', ':', '#'],
+        };
+        assert_eq!(
+            sparkline(&[0.0, 50.0, 100.0], Scale::Percent, &narrow).as_deref(),
+            Some(":#")
+        );
+    }
+
+    #[test]
+    fn graphs_increases_scaled_to_the_largest_in_view() {
+        // Cost went up by 1, 0, 2, then 4.
+        assert_eq!(
+            spark(&[1.0, 2.0, 2.0, 4.0, 8.0], Scale::Increase).as_deref(),
+            Some("▃▁▅█")
+        );
+        assert_eq!(spark(&[3.0], Scale::Increase).as_deref(), Some("▁"));
+        assert_eq!(
+            spark(&[3.0, 3.0, 1.0], Scale::Increase).as_deref(),
+            Some("▁▁")
+        );
+        assert_eq!(spark(&[], Scale::Increase), None);
+        // An old spike scrolls out of view and stops flattening the rest.
+        let mut values = vec![0.0, 100.0];
+        values.extend((1..=8).map(|v| 100.0 + v as f64));
+        assert_eq!(spark(&values, Scale::Increase).as_deref(), Some("████████"));
     }
 
     #[test]

@@ -1,6 +1,8 @@
 mod config;
+mod dirs;
 mod git;
 mod graph;
+mod history;
 mod predict;
 mod render;
 mod segments;
@@ -38,10 +40,21 @@ fn main() {
         Config::default()
     });
 
+    let now = now();
+    let (history, history_error) = if config.needs_history() {
+        history::update(&session, now)
+    } else {
+        (Vec::new(), None)
+    };
+    if let Some(error) = history_error {
+        let _ = writeln!(io::stderr().lock(), "astro-statusline: {error}");
+    }
+
     let env = Env {
         session: &session,
         config: &config,
-        now: now(),
+        now,
+        history: &history,
     };
     let line = render::render(
         segments::all(&env),

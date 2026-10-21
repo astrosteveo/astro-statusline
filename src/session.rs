@@ -13,6 +13,8 @@ use serde_json::Value;
 #[derive(Debug, Default, Deserialize)]
 pub struct Session {
     #[serde(default, deserialize_with = "lenient")]
+    pub session_id: Option<String>,
+    #[serde(default, deserialize_with = "lenient")]
     pub cwd: Option<PathBuf>,
     #[serde(default, deserialize_with = "lenient")]
     pub model: Option<Model>,
