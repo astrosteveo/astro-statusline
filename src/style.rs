@@ -5,6 +5,8 @@
 
 use std::str::FromStr;
 
+use serde::Deserialize;
+
 const ATTRIBUTES: [(&str, u8); 4] = [("bold", 1), ("dim", 2), ("italic", 3), ("underline", 4)];
 
 const COLORS: [&str; 8] = [
@@ -12,7 +14,8 @@ const COLORS: [&str; 8] = [
 ];
 
 /// The parameters of an ANSI SGR escape, such as `1;36` for bold cyan.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(try_from = "String")]
 pub struct Style(Vec<u8>);
 
 impl Style {
@@ -50,6 +53,14 @@ impl FromStr for Style {
         }
         attributes.extend(color.unwrap_or_default());
         Ok(Style(attributes))
+    }
+}
+
+impl TryFrom<String> for Style {
+    type Error = String;
+
+    fn try_from(text: String) -> Result<Self, Self::Error> {
+        text.parse()
     }
 }
 

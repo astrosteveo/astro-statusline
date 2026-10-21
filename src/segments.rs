@@ -1,5 +1,7 @@
 //! The segments of the status line. Each is left out when the session lacks its data.
 
+use serde::Deserialize;
+
 use crate::config::{Colors, Config};
 use crate::git;
 use crate::render::Segment;
@@ -7,7 +9,8 @@ use crate::session::Session;
 
 /// A segment the config can name. Each keeps its priority wherever it sits in the line, so a
 /// narrow terminal drops the same segments first.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Kind {
     Model,
     Directory,

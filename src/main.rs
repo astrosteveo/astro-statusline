@@ -22,7 +22,15 @@ fn main() {
     let _ = io::stdin().read_to_end(&mut input);
     let session = Session::parse(&input);
 
-    let config = Config::default();
+    let config = config::load().unwrap_or_else(|error| {
+        // Claude Code doesn't show stderr, but running the command by hand does.
+        let _ = writeln!(io::stderr().lock(), "astro-statusline: {error}");
+        let _ = writeln!(
+            io::stderr().lock(),
+            "astro-statusline: using the default config"
+        );
+        Config::default()
+    });
 
     let line = render::render(
         segments::all(&session, &config),
