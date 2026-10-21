@@ -37,7 +37,7 @@ fits again within a second of a resize. A run takes about half a millisecond.
 ## Configure
 
 The config file is `~/.config/astro-statusline/config.toml`, or
-`$XDG_CONFIG_HOME/astro-statusline/config.toml` when `XDG_CONFIG_HOME` is set. Every key is optional.
+`$XDG_CONFIG_HOME/astro-statusline/config.toml` when `XDG_CONFIG_HOME` is set to an absolute path. Every key is optional.
 These are the defaults:
 
 ```toml
