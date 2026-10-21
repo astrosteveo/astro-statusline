@@ -65,6 +65,9 @@ pub struct RateLimit {
     /// Share of the window's limit used, 0 to 100.
     #[serde(default, deserialize_with = "lenient")]
     pub used_percentage: Option<f64>,
+    /// When the window resets, in seconds since the Unix epoch.
+    #[serde(default, deserialize_with = "lenient")]
+    pub resets_at: Option<f64>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -72,6 +75,9 @@ pub struct Cost {
     /// Estimated at list price, so it may differ from the bill.
     #[serde(default, deserialize_with = "lenient")]
     pub total_cost_usd: Option<f64>,
+    /// Wall-clock time the session has run, idle time included.
+    #[serde(default, deserialize_with = "lenient")]
+    pub total_duration_ms: Option<f64>,
 }
 
 impl Session {

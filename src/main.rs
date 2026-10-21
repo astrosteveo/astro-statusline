@@ -1,6 +1,7 @@
 mod config;
 mod git;
 mod graph;
+mod predict;
 mod render;
 mod segments;
 mod session;
@@ -10,8 +11,10 @@ mod units;
 
 use std::env;
 use std::io::{self, Read, Write};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use config::Config;
+use segments::Env;
 use session::Session;
 
 /// Claude Code draws the status line two columns in from each edge (measured in fullscreen
@@ -35,8 +38,13 @@ fn main() {
         Config::default()
     });
 
+    let env = Env {
+        session: &session,
+        config: &config,
+        now: now(),
+    };
     let line = render::render(
-        segments::all(&session, &config),
+        segments::all(&env),
         &config.format.separator,
         &config.colors.separator,
         max_width(),
@@ -46,6 +54,12 @@ fn main() {
     // Claude Code shows only stdout, and only after a zero exit, so a failed write has nowhere
     // useful to go.
     let _ = writeln!(io::stdout().lock(), "{line}");
+}
+
+/// Seconds since the Unix epoch, or `None` if the clock is set before it.
+fn now() -> Option<i64> {
+    let since_epoch = SystemTime::now().duration_since(UNIX_EPOCH).ok()?;
+    i64::try_from(since_epoch.as_secs()).ok()
 }
 
 /// The widest the line may be. Claude Code sets `COLUMNS` to the terminal width, since the

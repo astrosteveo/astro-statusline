@@ -6,6 +6,7 @@ use serde::Deserialize;
 use crate::config::{Colors, Config};
 use crate::git;
 use crate::graph;
+use crate::predict;
 use crate::render::Segment;
 use crate::session::{RateLimit, Session};
 use crate::style::Style;
@@ -44,8 +45,8 @@ impl Kind {
             Kind::Model | Kind::Directory => &["name"],
             Kind::Branch => &["branch"],
             Kind::Context => &["percent", "bar", "tokens", "size"],
-            Kind::FiveHour | Kind::SevenDay => &["percent", "bar"],
-            Kind::Cost => &["usd"],
+            Kind::FiveHour | Kind::SevenDay => &["percent", "bar", "resets_in", "projected", "eta"],
+            Kind::Cost => &["usd", "rate"],
         }
     }
 
@@ -63,16 +64,26 @@ impl Kind {
     }
 }
 
-/// The segments `config` lists, in its order.
-pub fn all(session: &Session, config: &Config) -> Vec<Segment> {
-    config
+/// What segments are drawn from.
+pub struct Env<'a> {
+    pub session: &'a Session,
+    pub config: &'a Config,
+    /// Seconds since the Unix epoch, or `None` when the clock can't say, which leaves out
+    /// everything measured from now.
+    pub now: Option<i64>,
+}
+
+/// The segments the config lists, in its order.
+pub fn all(env: &Env) -> Vec<Segment> {
+    env.config
         .segments
         .iter()
-        .filter_map(|&kind| segment(kind, session, config))
+        .filter_map(|&kind| segment(kind, env))
         .collect()
 }
 
-fn segment(kind: Kind, session: &Session, config: &Config) -> Option<Segment> {
+fn segment(kind: Kind, env: &Env) -> Option<Segment> {
+    let (session, config) = (env.session, env.config);
     let (colors, format) = (&config.colors, &config.format);
     let (text, style) = match kind {
         Kind::Model => {
@@ -113,16 +124,21 @@ fn segment(kind: Kind, session: &Session, config: &Config) -> Option<Segment> {
         }
         Kind::FiveHour => {
             let limit = session.rate_limits.as_ref()?.five_hour.as_ref()?;
-            rate_limit(limit, &format.five_hour, config)?
+            rate_limit(limit, predict::FIVE_HOURS, &format.five_hour, env)?
         }
         Kind::SevenDay => {
             let limit = session.rate_limits.as_ref()?.seven_day.as_ref()?;
-            rate_limit(limit, &format.seven_day, config)?
+            rate_limit(limit, predict::SEVEN_DAYS, &format.seven_day, env)?
         }
         Kind::Cost => {
-            let usd = session.cost.as_ref()?.total_cost_usd?;
+            let cost = session.cost.as_ref()?;
+            let usd = cost.total_cost_usd?;
             let text = format.cost.render(|key| match key {
                 "usd" => Some(format!("${usd:.2}")),
+                "rate" => cost
+                    .total_duration_ms
+                    .and_then(|ms| predict::cost_rate(usd, ms))
+                    .map(|rate| format!("${rate:.2}")),
                 _ => None,
             });
             (text?, &colors.cost)
@@ -131,18 +147,38 @@ fn segment(kind: Kind, session: &Session, config: &Config) -> Option<Segment> {
     Some(Segment::new(text, style.clone(), kind.priority()))
 }
 
+/// A rate limit over a `window` seconds long.
 fn rate_limit<'a>(
     limit: &RateLimit,
+    window: f64,
     template: &Template,
-    config: &'a Config,
+    env: &Env<'a>,
 ) -> Option<(String, &'a Style)> {
     let used = limit.used_percentage?;
+    let now_and_reset = env.now.zip(limit.resets_at);
+    let pace =
+        now_and_reset.and_then(|(now, resets_at)| predict::pace(used, resets_at, now, window));
     let text = template.render(|key| match key {
         "percent" => Some(percent(used)),
-        "bar" => graph::bar(used, &config.bar),
+        "bar" => graph::bar(used, &env.config.bar),
+        "resets_in" => now_and_reset
+            .and_then(|(now, resets_at)| predict::resets_in(resets_at, now, window))
+            .map(seconds),
+        "projected" => pace.map(|pace| match pace.projected {
+            p if p > 999.0 => ">999%".to_string(),
+            // Rounded down, so it reads 100% only when the eta says the limit will be hit.
+            p => format!("{}%", p as u64),
+        }),
+        "eta" => pace.and_then(|pace| pace.eta).map(seconds),
         _ => None,
     })?;
-    Some((text, usage_style(used, &config.colors)))
+    Some((text, usage_style(used, &env.config.colors)))
+}
+
+/// A duration in seconds, which callers have checked is a finite number not below zero.
+fn seconds(seconds: f64) -> String {
+    // `as` rounds toward zero and saturates.
+    units::duration(seconds as u64)
 }
 
 /// A percentage, rounded. `as` saturates, so a negative or out-of-range value can't print as
@@ -180,8 +216,20 @@ mod tests {
         "cost": {"total_cost_usd": 0.01234, "total_duration_ms": 45000}
     }"#;
 
+    /// When the fixtures are drawn: an hour before `FULL`'s 5-hour window resets.
+    const NOW: i64 = 1_738_422_000;
+
+    fn draw(input: &str, config: &Config) -> Vec<Segment> {
+        let session = Session::parse(input.as_bytes());
+        all(&Env {
+            session: &session,
+            config,
+            now: Some(NOW),
+        })
+    }
+
     fn segments(input: &str) -> Vec<Segment> {
-        all(&Session::parse(input.as_bytes()), &Config::default())
+        draw(input, &Config::default())
     }
 
     fn texts(input: &str) -> Vec<String> {
@@ -213,12 +261,9 @@ mod tests {
     }
 
     fn text_with(kind: Kind, template: &str, input: &str) -> Option<String> {
-        all(
-            &Session::parse(input.as_bytes()),
-            &with_template(kind, template),
-        )
-        .pop()
-        .map(|s| s.text)
+        draw(input, &with_template(kind, template))
+            .pop()
+            .map(|s| s.text)
     }
 
     #[test]
@@ -240,7 +285,7 @@ mod tests {
             },
             ..Config::default()
         };
-        let segments = all(&Session::parse(FULL.as_bytes()), &config);
+        let segments = draw(FULL, &config);
 
         let texts: Vec<&str> = segments.iter().map(|s| s.text.as_str()).collect();
         assert_eq!(texts, ["$0.01", "ctx 8%", "Opus"]);
@@ -255,7 +300,12 @@ mod tests {
         let repo = tempfile::tempdir().unwrap();
         std::fs::create_dir(repo.path().join(".git")).unwrap();
         std::fs::write(repo.path().join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
-        let input = FULL.replace("/home/me/proj", &repo.path().display().to_string());
+        // Usage high enough that both limits are on pace to run out, and a session long enough
+        // to have a cost rate.
+        let input = FULL
+            .replace("/home/me/proj", &repo.path().display().to_string())
+            .replace("23.5", "90")
+            .replace("45000", "3600000");
         for kind in Kind::ALL {
             for name in kind.placeholders() {
                 let text = text_with(kind, &format!("{{{name}}}"), &input);
@@ -283,6 +333,66 @@ mod tests {
             Some("ctx 8%")
         );
         assert_eq!(text_with(Kind::Context, "{percent} of {size}", input), None);
+    }
+
+    #[test]
+    fn predicts_rate_limits_and_cost() {
+        let text = |kind, template, input: &str| text_with(kind, template, input).unwrap();
+        // An hour left of five, 23.5% used: 29% by the reset, with no limit in sight.
+        let template = "{percent} resets {resets_in} → {projected}[ limit in {eta}]";
+        assert_eq!(text(Kind::FiveHour, template, FULL), "24% resets 1h → 29%");
+        // At 90%, the limit comes in 26 minutes, before the reset.
+        let busy = FULL.replace("23.5", "90");
+        assert_eq!(
+            text(Kind::FiveHour, template, &busy),
+            "90% resets 1h → 112% limit in 26m"
+        );
+        let over = FULL.replace("23.5", "100");
+        assert_eq!(
+            text(Kind::FiveHour, template, &over),
+            "100% resets 1h → 125% limit in now"
+        );
+        // 5 days 1 hour left of seven, 41.2% used.
+        assert_eq!(
+            text(Kind::SevenDay, "{resets_in} {projected} {eta}", FULL),
+            "5d1h 147% 2d19h"
+        );
+        // $0.50 over half an hour.
+        let input = r#"{"cost": {"total_cost_usd": 0.5, "total_duration_ms": 1800000}}"#;
+        assert_eq!(
+            text(Kind::Cost, "{usd}[ ({rate}/h)]", input),
+            "$0.50 ($1.00/h)"
+        );
+        // Under a minute in, there's no rate yet.
+        assert_eq!(text(Kind::Cost, "{usd}[ ({rate}/h)]", FULL), "$0.01");
+    }
+
+    #[test]
+    fn leaves_out_predictions_the_clock_or_data_cannot_support() {
+        let config = with_template(
+            Kind::FiveHour,
+            "{percent}[ {resets_in}][ {projected}][ {eta}]",
+        );
+        let session = Session::parse(FULL.replace("23.5", "90").as_bytes());
+        let draw = |now| {
+            all(&Env {
+                session: &session,
+                config: &config,
+                now,
+            })
+            .pop()
+            .map(|s| s.text)
+        };
+        assert_eq!(draw(Some(NOW)).as_deref(), Some("90% 1h 112% 26m"));
+        assert_eq!(draw(None).as_deref(), Some("90%"));
+        // Past the reset, and long before the window began.
+        assert_eq!(draw(Some(NOW + 3601)).as_deref(), Some("90%"));
+        assert_eq!(draw(Some(NOW - 86_400)).as_deref(), Some("90%"));
+        let no_reset = r#"{"rate_limits": {"five_hour": {"used_percentage": 90}}}"#;
+        assert_eq!(
+            text_with(Kind::FiveHour, "{percent}[ {resets_in}][ {eta}]", no_reset).as_deref(),
+            Some("90%")
+        );
     }
 
     #[test]

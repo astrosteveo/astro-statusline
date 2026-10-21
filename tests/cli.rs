@@ -4,6 +4,7 @@
 use std::fs;
 use std::io::Write;
 use std::process::{Command, Stdio};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 struct Output {
     stdout: String,
@@ -197,4 +198,33 @@ fn draws_templates_and_bars_from_the_config_file() {
     let out = run_with_config(Some(config), input, &[("NO_COLOR", "1")]);
     assert_eq!(out.stdout, "ctx ##.. 63% │ [$1.50]\n");
     assert_eq!(out.stderr, "");
+}
+
+#[test]
+fn predicts_rate_limits_from_the_clock() {
+    let config = r#"
+        segments = ["five_hour", "cost"]
+
+        [format]
+        five_hour = "5h {percent} resets {resets_in}[ ⚠ limit in {eta}]"
+        cost = "{usd}[ ({rate}/h)]"
+    "#;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    // An hour and 30 seconds left of the 5-hour window, so the countdown reads 1h even if the
+    // binary reads the clock a few seconds later. With 90% used, 100% comes in about 26 minutes.
+    let input = format!(
+        r#"{{
+            "rate_limits": {{"five_hour": {{"used_percentage": 90, "resets_at": {}}}}},
+            "cost": {{"total_cost_usd": 2, "total_duration_ms": 3600000}}
+        }}"#,
+        now + 3630
+    );
+    let out = run_with_config(Some(config), input.as_bytes(), &[("NO_COLOR", "1")]);
+    assert_eq!(
+        out.stdout,
+        "5h 90% resets 1h ⚠ limit in 26m │ $2.00 ($2.00/h)\n"
+    );
 }
