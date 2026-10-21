@@ -94,11 +94,13 @@ pub struct Graph {
 }
 
 impl Config {
-    /// Whether any segment shown needs the session's history.
+    /// Whether any segment shown needs the session's history: for a graph, or for the context
+    /// segment's fill prediction.
     pub fn needs_history(&self) -> bool {
-        self.segments
-            .iter()
-            .any(|&kind| self.format.template(kind).uses("graph"))
+        self.segments.iter().any(|&kind| {
+            let template = self.format.template(kind);
+            template.uses("graph") || (kind == Kind::Context && template.uses("eta"))
+        })
     }
 }
 
@@ -404,6 +406,17 @@ mod tests {
         );
         let hidden = "segments = [\"model\"]\nformat.cost = \"{usd} {graph}\"";
         assert!(!parse(hidden).unwrap().needs_history());
+        assert!(
+            parse("format.context = \"[{eta}]\"")
+                .unwrap()
+                .needs_history()
+        );
+        // A rate limit's eta comes from its reset time, not from history.
+        assert!(
+            !parse("format.five_hour = \"[{eta}]\"")
+                .unwrap()
+                .needs_history()
+        );
     }
 
     #[test]

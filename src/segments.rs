@@ -45,7 +45,7 @@ impl Kind {
         match self {
             Kind::Model | Kind::Directory => &["name"],
             Kind::Branch => &["branch"],
-            Kind::Context => &["percent", "bar", "graph", "tokens", "size"],
+            Kind::Context => &["percent", "bar", "graph", "eta", "tokens", "size"],
             Kind::FiveHour | Kind::SevenDay => {
                 &["percent", "bar", "graph", "resets_in", "projected", "eta"]
             }
@@ -123,6 +123,10 @@ fn segment(kind: Kind, env: &Env) -> Option<Segment> {
                 "percent" => Some(percent(used)),
                 "bar" => graph::bar(used, &config.bar),
                 "graph" => graph(env, |s| s.context, Scale::Percent),
+                "eta" => env.now.and_then(|now| {
+                    let samples: Vec<_> = env.history.iter().map(|s| (s.t, s.context)).collect();
+                    predict::fill_eta(&samples, now).map(seconds)
+                }),
                 "tokens" => window.total_input_tokens.map(units::tokens),
                 "size" => window.context_window_size.map(units::tokens),
                 _ => None,
@@ -336,10 +340,24 @@ mod tests {
             .replace("/home/me/proj", &repo.path().display().to_string())
             .replace("23.5", "90")
             .replace("45000", "3600000");
+        let session = Session::parse(input.as_bytes());
+        // Context lower ten minutes ago, so it has a fill rate.
+        let earlier = Sample {
+            t: NOW - 600,
+            context: Some(1.0),
+            ..Sample::default()
+        };
+        let history = [earlier, Sample::new(&session, NOW)];
         for kind in Kind::ALL {
             for name in kind.placeholders() {
-                let text = text_with(kind, &format!("{{{name}}}"), &input);
-                assert!(text.is_some(), "{kind:?} left {{{name}}} empty");
+                let config = with_template(kind, &format!("{{{name}}}"));
+                let env = Env {
+                    session: &session,
+                    config: &config,
+                    now: Some(NOW),
+                    history: &history,
+                };
+                assert!(!all(&env).is_empty(), "{kind:?} left {{{name}}} empty");
             }
         }
     }
@@ -449,6 +467,32 @@ mod tests {
             history: &history,
         });
         assert_eq!(segments[0].text, "80% ▁▇");
+    }
+
+    #[test]
+    fn predicts_when_the_context_fills() {
+        let config = with_template(Kind::Context, "{percent}[ full in {eta}]");
+        let session = Session::parse(br#"{"context_window": {"used_percentage": 60}}"#);
+        let at = |t, context| Sample {
+            t,
+            context: Some(context),
+            ..Sample::default()
+        };
+        let draw = |history: &[Sample]| {
+            all(&Env {
+                session: &session,
+                config: &config,
+                now: Some(NOW),
+                history,
+            })
+            .remove(0)
+            .text
+        };
+        assert_eq!(
+            draw(&[at(NOW - 600, 40.0), at(NOW, 60.0)]),
+            "60% full in 20m"
+        );
+        assert_eq!(draw(&[at(NOW, 60.0)]), "60%");
     }
 
     #[test]

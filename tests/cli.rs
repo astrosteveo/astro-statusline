@@ -314,3 +314,35 @@ fn keeps_no_history_for_a_session_id_that_isnt_a_plain_name() {
     assert_eq!(files_under(state.path()), Vec::<String>::new());
     assert!(!state.path().join("escape.json").exists());
 }
+
+#[test]
+fn predicts_the_context_filling_from_recent_history() {
+    let state = tempfile::tempdir().unwrap();
+    let sessions = state.path().join("astro-statusline/sessions");
+    fs::create_dir_all(&sessions).unwrap();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    // 40% two minutes ago and 50% one minute ago. At 60% now, that's 10 points a minute, so 100%
+    // comes in 4 minutes, even if a few seconds pass before the binary reads the clock.
+    fs::write(
+        sessions.join("abc.json"),
+        format!(
+            r#"{{"samples": [{{"t": {}, "context": 40}}, {{"t": {}, "context": 50}}]}}"#,
+            now - 120,
+            now - 60
+        ),
+    )
+    .unwrap();
+    let config = "segments = [\"context\"]\nformat.context = \"ctx {percent}[ full in {eta}]\"";
+    let env = [
+        ("NO_COLOR", "1"),
+        ("XDG_STATE_HOME", state.path().to_str().unwrap()),
+    ];
+    let out = run_with_config(Some(config), context_update("abc", 60).as_bytes(), &env);
+    assert_eq!(out.stdout, "ctx 60% full in 4m\n");
+    // A session with no history yet has no rate to go on.
+    let out = run_with_config(Some(config), context_update("new", 60).as_bytes(), &env);
+    assert_eq!(out.stdout, "ctx 60%\n");
+}

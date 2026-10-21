@@ -9,6 +9,13 @@ pub const SEVEN_DAYS: f64 = 7.0 * 86400.0;
 /// Too early in a window, a burst of use would project wildly, so pace waits for this share of it.
 const MIN_ELAPSED_SHARE: f64 = 0.15;
 
+/// How far back a fill rate looks, in seconds. Older samples describe a different pace of work,
+/// and after this long idle there is no current pace to predict from.
+const FILL_LOOKBACK: i64 = 15 * 60;
+
+/// A fill rate needs samples at least this many seconds apart.
+const MIN_FILL_SPAN: i64 = 60;
+
 /// Where a rate limit is headed at the average pace since its window started.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Pace {
@@ -45,6 +52,32 @@ pub fn pace(used: f64, resets_at: f64, now: i64, window: f64) -> Option<Pace> {
         None
     };
     projected.is_finite().then_some(Pace { projected, eta })
+}
+
+/// Seconds after the last of `samples` until its percentage reaches 100, at the rate it rose
+/// across the latest unbroken stretch of the last `FILL_LOOKBACK` seconds before `now`. The
+/// stretch ends at a missing value, a drop (such as a compaction), or a sample that isn't older
+/// than the one after it. `samples` are `(seconds since the epoch, percentage)`, oldest first.
+pub fn fill_eta(samples: &[(i64, Option<f64>)], now: i64) -> Option<f64> {
+    let (&(last_t, last), earlier) = samples.split_last()?;
+    let last = last.filter(|last| (0.0..100.0).contains(last))?;
+    let since = now.checked_sub(FILL_LOOKBACK)?;
+    if last_t < since || last_t > now {
+        return None;
+    }
+    let mut first = (last_t, last);
+    for &(t, value) in earlier.iter().rev() {
+        match value {
+            Some(value) if t < first.0 && t >= since && value <= first.1 => first = (t, value),
+            _ => break,
+        }
+    }
+    let (span, rise) = (last_t - first.0, last - first.1);
+    if span < MIN_FILL_SPAN || rise <= 0.0 {
+        return None;
+    }
+    let eta = (100.0 - last) / (rise / span as f64);
+    eta.is_finite().then_some(eta)
 }
 
 /// Dollars per hour over the session so far, idle time included.
@@ -126,6 +159,84 @@ mod tests {
         assert_eq!(pace(50.0, 1e300, NOW, SEVEN_DAYS), None);
         assert_eq!(pace(50.0, f64::NAN, NOW, SEVEN_DAYS), None);
         assert_eq!(pace(50.0, NOW as f64 + 3600.0, i64::MIN, FIVE_HOURS), None);
+    }
+
+    #[test]
+    fn predicts_when_the_context_fills_from_its_recent_rise() {
+        // 40% to 60% over ten minutes: 2% a minute, so 20 more minutes to 100%.
+        let samples = [
+            (NOW - 600, Some(40.0)),
+            (NOW - 300, Some(50.0)),
+            (NOW, Some(60.0)),
+        ];
+        assert_eq!(fill_eta(&samples, NOW), Some(1200.0));
+        // Counted from the last sample, while it's recent.
+        assert_eq!(fill_eta(&samples, NOW + 120), Some(1200.0));
+        // A flat stretch slows the rate down.
+        let flat = [
+            (NOW - 600, Some(50.0)),
+            (NOW - 300, Some(50.0)),
+            (NOW, Some(60.0)),
+        ];
+        assert_eq!(fill_eta(&flat, NOW), Some(2400.0));
+    }
+
+    #[test]
+    fn measures_only_since_the_last_break() {
+        let after = |before: Option<f64>| {
+            fill_eta(
+                &[
+                    (NOW - 900, Some(10.0)),
+                    (NOW - 600, before),
+                    (NOW - 300, Some(40.0)),
+                    (NOW, Some(60.0)),
+                ],
+                NOW,
+            )
+        };
+        // Unbroken from 10%: 50 points in 15 minutes.
+        assert_eq!(after(Some(20.0)), Some(720.0));
+        // A compaction to 5% or a missing value starts the stretch afresh at 40%.
+        assert_eq!(after(Some(90.0)), Some(600.0));
+        assert_eq!(after(None), Some(600.0));
+        // Samples past the lookback don't count.
+        let old = [
+            (NOW - 1000, Some(0.0)),
+            (NOW - 300, Some(40.0)),
+            (NOW, Some(60.0)),
+        ];
+        assert_eq!(fill_eta(&old, NOW), Some(600.0));
+    }
+
+    #[test]
+    fn has_no_fill_eta_without_a_recent_rise() {
+        let none = |samples: &[(i64, Option<f64>)]| fill_eta(samples, NOW);
+        assert_eq!(none(&[]), None);
+        assert_eq!(none(&[(NOW, Some(50.0))]), None);
+        // Under a minute apart, falling, flat, full, or missing.
+        assert_eq!(none(&[(NOW - 59, Some(10.0)), (NOW, Some(50.0))]), None);
+        assert_eq!(none(&[(NOW - 300, Some(60.0)), (NOW, Some(50.0))]), None);
+        assert_eq!(none(&[(NOW - 300, Some(50.0)), (NOW, Some(50.0))]), None);
+        assert_eq!(none(&[(NOW - 300, Some(50.0)), (NOW, Some(100.0))]), None);
+        assert_eq!(none(&[(NOW - 300, Some(50.0)), (NOW, None)]), None);
+        assert_eq!(none(&[(NOW - 300, Some(-50.0)), (NOW, Some(-10.0))]), None);
+        // Idle past the lookback, a last sample from the future, or out-of-order times.
+        assert_eq!(
+            fill_eta(&[(NOW - 300, Some(40.0)), (NOW, Some(60.0))], NOW + 901),
+            None
+        );
+        assert_eq!(
+            none(&[(NOW - 300, Some(40.0)), (NOW + 5, Some(60.0))]),
+            None
+        );
+        assert_eq!(none(&[(NOW, Some(40.0)), (NOW, Some(60.0))]), None);
+        assert_eq!(
+            fill_eta(&[(0, Some(40.0)), (60, Some(60.0))], i64::MIN),
+            None
+        );
+        // A tiny rise, far from full, is a very long time, but still a number.
+        let slow = none(&[(NOW - 900, Some(0.0)), (NOW, Some(1e-300))]);
+        assert!(slow.is_some_and(f64::is_finite), "{slow:?}");
     }
 
     #[test]
