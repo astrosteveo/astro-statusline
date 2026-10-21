@@ -8,8 +8,8 @@ use std::io::{self, Read, Write};
 
 use session::Session;
 
-/// Claude Code indents the status line, plus any `padding` set in settings, so leave a few
-/// columns spare to keep the line from wrapping.
+/// Claude Code draws the status line two columns in from each edge (measured in fullscreen
+/// rendering), and cuts off anything wider. A `padding` set in settings takes more.
 const EDGE_RESERVE: usize = 4;
 
 fn main() {
