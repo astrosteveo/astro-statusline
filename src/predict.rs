@@ -31,6 +31,14 @@ pub fn resets_in(resets_at: f64, now: i64, window: f64) -> Option<f64> {
     (left > 0.0 && left <= window).then_some(left)
 }
 
+/// The percentage a rate limit would have used by `now` at the even pace that reaches 100% right
+/// as it resets at `resets_at`: the share of the `window` gone so far. From 0 up to, not including,
+/// 100. This takes the window to have started one `window` before it resets.
+pub fn target(resets_at: f64, now: i64, window: f64) -> Option<f64> {
+    let elapsed = window - resets_in(resets_at, now, window)?;
+    Some(elapsed / window * 100.0)
+}
+
 /// The pace of a rate limit `used` percent through a `window` that resets at `resets_at`. This
 /// takes the window to have started one `window` before it resets.
 pub fn pace(used: f64, resets_at: f64, now: i64, window: f64) -> Option<Pace> {
@@ -114,6 +122,22 @@ mod tests {
             None
         );
         assert_eq!(resets_in(1e300, NOW, SEVEN_DAYS), None);
+    }
+
+    #[test]
+    fn targets_the_share_of_the_window_gone() {
+        let target = |hours_left: f64| target(NOW as f64 + hours_left * 3600.0, NOW, FIVE_HOURS);
+        assert_eq!(target(2.5), Some(50.0));
+        assert_eq!(target(1.0), Some(80.0));
+        // Just reset, and a second before the next reset.
+        assert_eq!(target(5.0), Some(0.0));
+        let last = target(1.0 / 3600.0).unwrap();
+        assert!(last > 99.99 && last < 100.0, "{last}");
+        // Past the reset, or long before the window began.
+        assert_eq!(target(0.0), None);
+        assert_eq!(target(6.0), None);
+        assert_eq!(super::target(f64::NAN, NOW, SEVEN_DAYS), None);
+        assert_eq!(super::target(1e300, NOW, SEVEN_DAYS), None);
     }
 
     #[test]

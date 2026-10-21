@@ -46,9 +46,16 @@ impl Kind {
             Kind::Model | Kind::Directory => &["name"],
             Kind::Branch => &["branch"],
             Kind::Context => &["percent", "bar", "graph", "eta", "tokens", "size"],
-            Kind::FiveHour | Kind::SevenDay => {
-                &["percent", "bar", "graph", "resets_in", "projected", "eta"]
-            }
+            Kind::FiveHour | Kind::SevenDay => &[
+                "percent",
+                "bar",
+                "graph",
+                "resets_in",
+                "projected",
+                "eta",
+                "target",
+                "delta",
+            ],
             Kind::Cost => &["usd", "rate", "graph"],
         }
     }
@@ -182,6 +189,7 @@ fn rate_limit<'a>(
     let now_and_reset = env.now.zip(limit.resets_at);
     let pace =
         now_and_reset.and_then(|(now, resets_at)| predict::pace(used, resets_at, now, window));
+    let target = now_and_reset.and_then(|(now, resets_at)| predict::target(resets_at, now, window));
     let text = template.render(|key| match key {
         "percent" => Some(percent(used)),
         "bar" => graph::bar(used, &env.config.bar),
@@ -195,6 +203,8 @@ fn rate_limit<'a>(
             p => format!("{}%", p as u64),
         }),
         "eta" => pace.and_then(|pace| pace.eta).map(seconds),
+        "target" => target.map(percent),
+        "delta" => target.map(|target| delta(used, target)),
         _ => None,
     })?;
     Some((text, usage_style(used, &env.config.colors)))
@@ -215,7 +225,24 @@ fn seconds(seconds: f64) -> String {
 /// A percentage, rounded. `as` saturates, so a negative or out-of-range value can't print as
 /// "-0" or wrap.
 fn percent(used: f64) -> String {
-    format!("{}%", used.round().max(0.0) as u64)
+    format!("{}%", whole_percent(used))
+}
+
+/// How far `used` is over (`+8%`) or under (`-16%`) `target`, from the rounded values, so it
+/// agrees with what `percent` shows for each.
+fn delta(used: f64, target: f64) -> String {
+    let (used, target) = (whole_percent(used), whole_percent(target));
+    let sign = match used.cmp(&target) {
+        std::cmp::Ordering::Greater => "+",
+        std::cmp::Ordering::Less => "-",
+        std::cmp::Ordering::Equal => "",
+    };
+    format!("{sign}{}%", used.abs_diff(target))
+}
+
+/// A percentage rounded to a whole number, saturating at 0 and `u64::MAX`.
+fn whole_percent(value: f64) -> u64 {
+    value.round().max(0.0) as u64
 }
 
 /// The low usage color below half, medium below 80%, and high from there up.
@@ -413,6 +440,13 @@ mod tests {
             text(Kind::SevenDay, "{resets_in} {projected} {eta}", FULL),
             "5d1h 147% 2d19h"
         );
+        // Where each limit should be to end at 100%: 2d23h of seven days gone is 28%, four of
+        // five hours 80%.
+        let template = "{percent} of {target} ({delta})";
+        assert_eq!(text(Kind::SevenDay, template, FULL), "41% of 28% (+13%)");
+        assert_eq!(text(Kind::FiveHour, template, FULL), "24% of 80% (-56%)");
+        let on_pace = FULL.replace("23.5", "80.2");
+        assert_eq!(text(Kind::FiveHour, template, &on_pace), "80% of 80% (0%)");
         // $0.50 over half an hour.
         let input = r#"{"cost": {"total_cost_usd": 0.5, "total_duration_ms": 1800000}}"#;
         assert_eq!(
@@ -427,7 +461,7 @@ mod tests {
     fn leaves_out_predictions_the_clock_or_data_cannot_support() {
         let config = with_template(
             Kind::FiveHour,
-            "{percent}[ {resets_in}][ {projected}][ {eta}]",
+            "{percent}[ {resets_in}][ {projected}][ {eta}][ {target}][ {delta}]",
         );
         let session = Session::parse(FULL.replace("23.5", "90").as_bytes());
         let draw = |now| {
@@ -440,14 +474,19 @@ mod tests {
             .pop()
             .map(|s| s.text)
         };
-        assert_eq!(draw(Some(NOW)).as_deref(), Some("90% 1h 112% 26m"));
+        assert_eq!(draw(Some(NOW)).as_deref(), Some("90% 1h 112% 26m 80% +10%"));
         assert_eq!(draw(None).as_deref(), Some("90%"));
         // Past the reset, and long before the window began.
         assert_eq!(draw(Some(NOW + 3601)).as_deref(), Some("90%"));
         assert_eq!(draw(Some(NOW - 86_400)).as_deref(), Some("90%"));
         let no_reset = r#"{"rate_limits": {"five_hour": {"used_percentage": 90}}}"#;
         assert_eq!(
-            text_with(Kind::FiveHour, "{percent}[ {resets_in}][ {eta}]", no_reset).as_deref(),
+            text_with(
+                Kind::FiveHour,
+                "{percent}[ {resets_in}][ {eta}][ {target}][ {delta}]",
+                no_reset
+            )
+            .as_deref(),
             Some("90%")
         );
     }
