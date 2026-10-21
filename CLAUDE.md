@@ -11,5 +11,11 @@ code can't meet. Keep it short, and point to other docs instead of copying them.
 ## Check
 `cargo clippy --all-targets -- -D warnings && cargo test`
 
+## solo-review
+- This is the first project scaffolded and built with the solo-review plugin (REVIEW.md, `.review/`,
+  `.github/pull_request_template.md`).
+- When you hit a problem or edge case in solo-review, or have a suggestion, improvement, or enhancement for it, open
+  a GitHub issue at `astrosteveo/astro-plugins` (`gh issue create --repo astrosteveo/astro-plugins`).
+
 ## More
 - REVIEW.md: review settings and guide for /solo-review:review.
