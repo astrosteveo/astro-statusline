@@ -5,12 +5,15 @@
 //! current values when they changed, and writes it back through a temporary file and a rename,
 //! so a run killed partway (Claude Code cancels a run when a newer update arrives) leaves the old
 //! file whole. There is no fsync: a file torn by a crash reads as corrupt, which reads as empty.
-//! Two overlapping runs can lose one sample, since the last writer wins.
+//! Two overlapping runs can lose one sample, since the last writer wins. When a new session
+//! writes its first sample, files of sessions untouched for a week are deleted.
 
+use std::ffi::OsStr;
 use std::fs::{self, File};
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::process;
+use std::time::{Duration, SystemTime};
 
 use serde::{Deserialize, Serialize};
 
@@ -22,6 +25,9 @@ pub const MAX_SAMPLES: usize = 64;
 
 /// A history file larger than this is not read, so a stray file can't slow every run.
 const MAX_FILE_BYTES: u64 = 64 * 1024;
+
+/// Session files untouched for this long are deleted.
+const MAX_AGE: Duration = Duration::from_secs(7 * 86_400);
 
 /// The values of one update, at `t` seconds since the Unix epoch.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
@@ -100,9 +106,13 @@ fn valid_session_id(id: &str) -> bool {
 
 fn record(path: &Path, current: Sample) -> (Vec<Sample>, Option<String>) {
     let describe = |error: io::Error| format!("{}: {error}", path.display());
+    let mut new_session = false;
     let (mut samples, mut error) = match load(path) {
         Ok(samples) => (samples, None),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => (Vec::new(), None),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            new_session = true;
+            (Vec::new(), None)
+        }
         Err(e) => (Vec::new(), Some(describe(e))),
     };
     // A clock that stepped back would otherwise leave samples from the future in place.
@@ -116,10 +126,58 @@ fn record(path: &Path, current: Sample) -> (Vec<Sample>, Option<String>) {
     samples.push(current);
     let excess = samples.len().saturating_sub(MAX_SAMPLES);
     samples.drain(..excess);
-    if let Err(e) = save(path, &samples) {
-        error.get_or_insert(describe(e));
+    match save(path, &samples) {
+        // Once per session is often enough, and a file that won't save is no time to clean up.
+        Ok(()) if new_session => {
+            if let Some(dir) = path.parent() {
+                prune(dir, SystemTime::now());
+            }
+        }
+        Ok(()) => {}
+        Err(e) => {
+            error.get_or_insert(describe(e));
+        }
     }
     (samples, error)
+}
+
+/// Deletes session files in `dir` last changed more than `MAX_AGE` before `now`. `dir` is this
+/// program's own sessions directory, and even there only regular files directly in it with names
+/// this program writes are candidates, so a link, a subdirectory, or any other file is left alone.
+fn prune(dir: &Path, now: SystemTime) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        // `file_type` doesn't follow symlinks, so a link is never a regular file here.
+        let is_file = entry.file_type().is_ok_and(|kind| kind.is_file());
+        if !is_file || !is_ours(&entry.file_name()) {
+            continue;
+        }
+        let modified = entry.metadata().and_then(|meta| meta.modified());
+        // A time after `now` is an error here, and counts as recent.
+        let old =
+            modified.is_ok_and(|time| now.duration_since(time).is_ok_and(|age| age > MAX_AGE));
+        if old {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
+}
+
+/// Whether `name` is one `save` writes: `<id>.json`, or `<id>.json.<pid>.tmp` left by a run that
+/// was killed.
+fn is_ours(name: &OsStr) -> bool {
+    let Some(name) = name.to_str() else {
+        return false;
+    };
+    if let Some(id) = name.strip_suffix(".json") {
+        return valid_session_id(id);
+    }
+    name.strip_suffix(".tmp")
+        .and_then(|rest| rest.rsplit_once(".json."))
+        .is_some_and(|(id, pid)| {
+            valid_session_id(id) && !pid.is_empty() && pid.bytes().all(|b| b.is_ascii_digit())
+        })
 }
 
 fn load(path: &Path) -> io::Result<Vec<Sample>> {
@@ -235,6 +293,74 @@ mod tests {
         let (samples, error) = record(&dir.path().join("sessions/abc.json"), sample(100, 10.0));
         assert_eq!(contexts(&samples), [10.0]);
         assert!(error.is_some());
+    }
+
+    /// Writes `name` in `dir`, last changed `days_ago` days ago (negative for the future).
+    fn backdated(dir: &Path, name: &str, days_ago: i64) -> PathBuf {
+        let path = dir.join(name);
+        fs::write(&path, "{}").unwrap();
+        let offset = Duration::from_secs(days_ago.unsigned_abs() * 86_400);
+        let time = if days_ago >= 0 {
+            SystemTime::now() - offset
+        } else {
+            SystemTime::now() + offset
+        };
+        File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(time)
+            .unwrap();
+        path
+    }
+
+    // Unix only for the symlink.
+    #[cfg(unix)]
+    #[test]
+    fn prunes_only_its_own_old_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = backdated(dir.path(), "old-session.json", 8);
+        let killed = backdated(dir.path(), "old-session.json.4242.tmp", 8);
+        let recent = backdated(dir.path(), "recent.json", 6);
+        let future = backdated(dir.path(), "future.json", -3);
+        let keep = [
+            recent,
+            future,
+            backdated(dir.path(), "my notes.json", 30),
+            backdated(dir.path(), "notes.json.bak", 30),
+            backdated(dir.path(), "x.txt", 30),
+            backdated(dir.path(), "a.b.json", 30),
+            backdated(dir.path(), "abc.json.tmp", 30),
+            backdated(dir.path(), "abc.json.12x.tmp", 30),
+            backdated(dir.path(), ".json", 30),
+        ];
+        // A link with a session's name, to an old file elsewhere, and a directory with one.
+        let elsewhere = tempfile::tempdir().unwrap();
+        let target = backdated(elsewhere.path(), "target.json", 30);
+        let link = dir.path().join("linked.json");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let subdir = dir.path().join("subdir.json");
+        fs::create_dir(&subdir).unwrap();
+        let nested = backdated(&subdir, "nested.json", 30);
+
+        prune(dir.path(), SystemTime::now());
+
+        assert!(!old.exists() && !killed.exists());
+        for path in keep.iter().chain([&link, &target, &subdir, &nested]) {
+            assert!(path.exists(), "{} was deleted", path.display());
+        }
+    }
+
+    #[test]
+    fn a_new_session_prunes_and_an_old_one_does_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let stale = backdated(dir.path(), "stale.json", 8);
+        let ongoing = dir.path().join("ongoing.json");
+        fs::write(&ongoing, r#"{"samples": []}"#).unwrap();
+        record(&ongoing, sample(100, 10.0));
+        assert!(stale.exists(), "an ongoing session pruned");
+        record(&dir.path().join("new.json"), sample(100, 10.0));
+        assert!(!stale.exists(), "a new session didn't prune");
     }
 
     #[test]
