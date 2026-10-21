@@ -23,10 +23,15 @@ Then point Claude Code at it in `~/.claude/settings.json`:
 {
   "statusLine": {
     "type": "command",
-    "command": "~/.cargo/bin/astro-statusline"
+    "command": "~/.cargo/bin/astro-statusline",
+    "refreshInterval": 2
   }
 }
 ```
+
+Claude Code re-runs the command after events like a new message, but not when the terminal is resized.
+`refreshInterval` re-runs it every two seconds as well, so the line fits again shortly after a resize. A
+run takes about half a millisecond.
 
 ## Behavior
 
