@@ -59,6 +59,63 @@ fn renders_a_colored_line_from_the_session() {
     assert_eq!(out.stderr, "");
 }
 
+/// Every default segment, colored. Later changes to how segments are built must keep this line
+/// byte for byte.
+#[test]
+fn renders_every_default_segment_byte_for_byte() {
+    let root = tempfile::tempdir().expect("create a repo dir");
+    let repo = root.path().join("proj");
+    fs::create_dir_all(repo.join(".git")).expect("create .git");
+    fs::write(repo.join(".git/HEAD"), "ref: refs/heads/main\n").expect("write HEAD");
+    let input = format!(
+        r#"{{
+            "model": {{"display_name": "Opus"}},
+            "workspace": {{"current_dir": "{}"}},
+            "context_window": {{"used_percentage": 63}},
+            "rate_limits": {{
+                "five_hour": {{"used_percentage": 12}},
+                "seven_day": {{"used_percentage": 85}}
+            }},
+            "cost": {{"total_cost_usd": 1.234}}
+        }}"#,
+        repo.display()
+    );
+    let out = run(input.as_bytes(), &[]);
+    let separator = "\x1b[2m │ \x1b[0m";
+    let expected = [
+        "\x1b[36mOpus\x1b[0m",
+        "\x1b[34mproj\x1b[0m",
+        "\x1b[35mmain\x1b[0m",
+        "\x1b[33mctx 63%\x1b[0m",
+        "\x1b[32m5h 12%\x1b[0m",
+        "\x1b[31m7d 85%\x1b[0m",
+        "\x1b[2m$1.23\x1b[0m",
+    ]
+    .join(separator);
+    assert_eq!(out.stdout, format!("{expected}\n"));
+    assert_eq!(out.stderr, "");
+}
+
+/// Odd values render the way they always have: control characters stripped, percentages
+/// rounded and clamped, and a negative cost shown as is.
+#[test]
+fn renders_odd_values_byte_for_byte() {
+    let input = br#"{
+        "model": {"display_name": "O\u0007pus"},
+        "context_window": {"used_percentage": -0.4},
+        "rate_limits": {"five_hour": {"used_percentage": 1e300}},
+        "cost": {"total_cost_usd": -1}
+    }"#;
+    let out = run(input, &[("NO_COLOR", "1")]);
+    assert_eq!(
+        out.stdout,
+        "Opus │ ctx 0% │ 5h 18446744073709551615% │ $-1.00\n"
+    );
+    // 44 columns less the edge reserve is exactly the line without cost, the lowest priority.
+    let out = run(input, &[("NO_COLOR", "1"), ("COLUMNS", "44")]);
+    assert_eq!(out.stdout, "Opus │ ctx 0% │ 5h 18446744073709551615%\n");
+}
+
 #[test]
 fn honors_no_color_and_columns() {
     let input = br#"{"model": {"display_name": "Opus"}, "cwd": "/home/me/project"}"#;
