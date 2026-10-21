@@ -155,6 +155,7 @@ mod tests {
                 usage_low: style("bright_green"),
                 ..Colors::default()
             },
+            ..Config::default()
         };
         let segments = all(&Session::parse(FULL.as_bytes()), &config);
 

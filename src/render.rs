@@ -1,14 +1,13 @@
 //! Lays segments out as one line of the status line.
 //!
-//! Segment text has its control characters stripped, so a stray escape or newline in a model name
-//! or path can't bleed color or add a row. When the line is too wide, the lowest-priority segments
+//! Segment and separator text have their control characters stripped, so a stray escape or newline
+//! in a model name, path, or config can't bleed color or add a row. When the line is too wide, the lowest-priority segments
 //! go first, and a lone segment that still doesn't fit is cut short with an ellipsis.
 
 use unicode_width::UnicodeWidthStr;
 
 use crate::style::Style;
 
-const SEPARATOR: &str = " │ ";
 const RESET: &str = "\x1b[0m";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,27 +28,29 @@ impl Segment {
     }
 }
 
-/// Renders `segments` in order, joined by a separator drawn in `separator`, no wider than
+/// Renders `segments` in order, joined by `separator` drawn in `separator_style`, no wider than
 /// `max_width` columns when it is given, with ANSI color when `color` is set.
 pub fn render(
     segments: Vec<Segment>,
-    separator: &Style,
+    separator: &str,
+    separator_style: &Style,
     max_width: Option<usize>,
     color: bool,
 ) -> String {
     let mut segments: Vec<Segment> = segments
         .into_iter()
         .map(|s| Segment {
-            text: s.text.chars().filter(|c| !c.is_control()).collect(),
+            text: strip_controls(&s.text),
             ..s
         })
         .filter(|s| !s.text.is_empty())
         .collect();
+    let separator = strip_controls(separator);
     if let Some(max_width) = max_width {
-        fit(&mut segments, max_width);
+        fit(&mut segments, separator.width(), max_width);
     }
 
-    let separator = paint(SEPARATOR, separator, color);
+    let separator = paint(&separator, separator_style, color);
     segments
         .iter()
         .map(|s| paint(&s.text, &s.style, color))
@@ -57,8 +58,12 @@ pub fn render(
         .join(&separator)
 }
 
-fn fit(segments: &mut Vec<Segment>, max_width: usize) {
-    while segments.len() > 1 && line_width(segments) > max_width {
+fn strip_controls(text: &str) -> String {
+    text.chars().filter(|c| !c.is_control()).collect()
+}
+
+fn fit(segments: &mut Vec<Segment>, separator_width: usize, max_width: usize) {
+    while segments.len() > 1 && line_width(segments, separator_width) > max_width {
         // `min_by_key` keeps the first minimum, so walking backwards drops the rightmost of a tie.
         if let Some((index, _)) = segments
             .iter()
@@ -76,9 +81,9 @@ fn fit(segments: &mut Vec<Segment>, max_width: usize) {
     }
 }
 
-fn line_width(segments: &[Segment]) -> usize {
+fn line_width(segments: &[Segment], separator_width: usize) -> usize {
     let text: usize = segments.iter().map(|s| s.text.width()).sum();
-    text + SEPARATOR.width() * segments.len().saturating_sub(1)
+    text + separator_width * segments.len().saturating_sub(1)
 }
 
 /// Cuts `text` to at most `max_width` columns, ending in an ellipsis.
@@ -101,7 +106,7 @@ fn truncate(text: &str, max_width: usize) -> String {
 
 fn paint(text: &str, style: &Style, enabled: bool) -> String {
     match style.escape() {
-        Some(escape) if enabled => format!("{escape}{text}{RESET}"),
+        Some(escape) if enabled && !text.is_empty() => format!("{escape}{text}{RESET}"),
         _ => text.to_string(),
     }
 }
@@ -119,7 +124,7 @@ mod tests {
     }
 
     fn render(segments: Vec<Segment>, max_width: Option<usize>, color: bool) -> String {
-        super::render(segments, &style("dim"), max_width, color)
+        super::render(segments, " │ ", &style("dim"), max_width, color)
     }
 
     #[test]
@@ -144,8 +149,23 @@ mod tests {
     #[test]
     fn leaves_plain_styles_unescaped() {
         let segments = vec![Segment::new("Opus", style(""), 1), seg("proj", 2)];
-        let line = super::render(segments, &style(""), None, true);
+        let line = super::render(segments, " │ ", &style(""), None, true);
         assert_eq!(line, "Opus │ \x1b[36mproj\x1b[0m");
+    }
+
+    #[test]
+    fn fits_with_the_separator_it_is_given() {
+        let segments = vec![seg("aaaa", 2), seg("bbbb", 1)];
+        let line = super::render(segments.clone(), " · ", &style("dim"), Some(11), false);
+        assert_eq!(line, "aaaa · bbbb");
+        let line = super::render(segments.clone(), " -- ", &style("dim"), Some(11), false);
+        assert_eq!(line, "aaaa");
+        // Control characters can't sneak in through the config either.
+        let line = super::render(segments.clone(), "\x1b[31m|\n", &style(""), None, false);
+        assert_eq!(line, "aaaa[31m|bbbb");
+        // An empty separator draws no escape at all.
+        let line = super::render(segments, "", &style("dim"), Some(8), true);
+        assert_eq!(line, "\x1b[36maaaa\x1b[0m\x1b[36mbbbb\x1b[0m");
     }
 
     #[test]

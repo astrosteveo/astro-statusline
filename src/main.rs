@@ -34,6 +34,7 @@ fn main() {
 
     let line = render::render(
         segments::all(&session, &config),
+        &config.format.separator,
         &config.colors.separator,
         max_width(),
         color_enabled(),

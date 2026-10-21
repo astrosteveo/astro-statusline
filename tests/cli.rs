@@ -142,6 +142,9 @@ fn reads_segments_and_colors_from_the_config_file() {
         [colors]
         model = "bold 208"
         separator = ""
+
+        [format]
+        separator = " · "
     "#;
     let out = run_with_config(
         Some(config),
@@ -150,7 +153,7 @@ fn reads_segments_and_colors_from_the_config_file() {
     );
     assert_eq!(
         out.stdout,
-        "\x1b[34mproj\x1b[0m │ \x1b[1;38;5;208mOpus\x1b[0m\n"
+        "\x1b[34mproj\x1b[0m · \x1b[1;38;5;208mOpus\x1b[0m\n"
     );
     assert_eq!(out.stderr, "");
 }

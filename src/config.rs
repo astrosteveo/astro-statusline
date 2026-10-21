@@ -19,6 +19,7 @@ pub struct Config {
     /// The segments to show, left to right.
     pub segments: Vec<Kind>,
     pub colors: Colors,
+    pub format: Format,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -37,11 +38,28 @@ pub struct Colors {
     pub usage_high: Style,
 }
 
+/// The text of each part of the line.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Format {
+    /// Drawn between segments, in `colors.separator`.
+    pub separator: String,
+}
+
 impl Default for Config {
     fn default() -> Self {
         Config {
             segments: Kind::ALL.to_vec(),
             colors: Colors::default(),
+            format: Format::default(),
+        }
+    }
+}
+
+impl Default for Format {
+    fn default() -> Self {
+        Format {
+            separator: " │ ".to_string(),
         }
     }
 }
@@ -122,6 +140,9 @@ mod tests {
             usage_low = "green"
             usage_medium = "yellow"
             usage_high = "red"
+
+            [format]
+            separator = " │ "
         "##;
         assert_eq!(parse(documented).unwrap(), Config::default());
         assert_eq!(parse("").unwrap(), Config::default());
@@ -140,6 +161,10 @@ mod tests {
         assert_eq!(config.colors.model, style("bold #ff8700"));
         assert_eq!(config.colors.branch, style("magenta"));
         assert_eq!(parse("segments = []").unwrap().segments, []);
+        assert_eq!(
+            parse("format.separator = \"\"").unwrap().format.separator,
+            ""
+        );
     }
 
     #[test]
@@ -151,6 +176,8 @@ mod tests {
             ("segments = \"model\"", "invalid type"),
             ("colors.model = \"purple\"", "unknown style \"purple\""),
             ("colors.model = 208", "invalid type"),
+            ("format.separator = 1", "invalid type"),
+            ("format.sep = \" \"", "unknown field `sep`"),
         ];
         for (text, expected) in cases {
             let error = parse(text).unwrap_err();
