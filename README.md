@@ -72,6 +72,7 @@ cost = "{usd}"
 width = 10
 full = "█"
 empty = "░"
+marker = "┃"
 
 [graph]
 width = 8
@@ -109,10 +110,12 @@ they come and go:
 | `directory` | `{name}` |
 | `branch` | `{branch}` |
 | `context` | `{percent}` `{bar}` `{graph}` `{eta}` `{tokens}` `{size}` |
-| `five_hour`, `seven_day` | `{percent}` `{bar}` `{graph}` `{resets_in}` `{projected}` `{eta}` |
+| `five_hour`, `seven_day` | `{percent}` `{bar}` `{graph}` `{resets_in}` `{projected}` `{eta}` `{target}` `{delta}` |
 | `cost` | `{usd}` `{rate}` `{graph}` |
 
-- `{bar}`: the percentage as a bar of `[bar] width` cells. A cell fills for each whole step.
+- `{bar}`: the percentage as a bar of `[bar] width` cells. A cell fills for each whole step. On a rate
+  limit, `[bar] marker` marks where `{target}` falls: ahead of the fill, you're under pace; inside it,
+  over.
 - `{graph}`: the latest values, one cell each, up to `[graph] width`. Percentages use a fixed 0 to 100
   scale. The cost graph shows how much each update added, scaled to the largest one in view.
 - `{tokens}`, `{size}`: tokens in the context window, and the most it holds, such as `126k` and `200k`.
@@ -121,6 +124,9 @@ they come and go:
   window started. It waits until 15% of the window has passed.
 - `{eta}` on a rate limit: when you'll hit 100% at that pace. It shows only if that comes before the
   reset, and reads `now` once you're there.
+- `{target}`: where usage would be by now at an even pace that reaches exactly 100% at the reset, the
+  share of the window gone, such as `57%`.
+- `{delta}`: how far `{percent}` is over or under `{target}`, such as `+8%` or `-16%`.
 - `{eta}` on the context: when it reaches 100% at the rate it grew over the last 15 minutes of work.
   It doesn't count down while you're idle, and auto-compact can come sooner.
 - `{rate}`: the session's cost per hour so far, idle time included.
@@ -142,7 +148,7 @@ lines = [
 separator = " · "
 context = "ctx {bar} {percent} {graph}[ full in {eta}]"
 five_hour = "5h {percent}[ ⚠ limit in {eta}][ resets {resets_in}]"
-seven_day = "7d {percent}[ → {projected}]"
+seven_day = "7d {bar} {percent}[ ({delta})][ → {projected}]"
 cost = "{usd} {graph}[ ({rate}/h)]"
 
 [bar]
@@ -151,7 +157,7 @@ width = 8
 
 ```text
 Opus 5.5 · astro-statusline · main
-ctx ████░░░░ 58% ▂▃▃▃▄▄▅▅ full in 16m · 5h 71% ⚠ limit in 1h13m resets 2h · 7d 30% → 70% · $1.23 ▃▆▄██▅▄ ($0.82/h)
+ctx ████░░░░ 58% ▂▃▃▃▄▄▅▅ full in 16m · 5h 71% ⚠ limit in 1h13m resets 2h · 7d ██░┃░░░░ 30% (-13%) → 70% · $1.23 ▃▆▄██▅▄ ($0.82/h)
 ```
 
 A row with nothing to show is left out, so the second row appears with the first response.
