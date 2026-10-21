@@ -5,6 +5,7 @@ use serde::Deserialize;
 
 use crate::config::{Colors, Config};
 use crate::git;
+use crate::graph;
 use crate::render::Segment;
 use crate::session::{RateLimit, Session};
 use crate::style::Style;
@@ -42,8 +43,8 @@ impl Kind {
         match self {
             Kind::Model | Kind::Directory => &["name"],
             Kind::Branch => &["branch"],
-            Kind::Context => &["percent", "tokens", "size"],
-            Kind::FiveHour | Kind::SevenDay => &["percent"],
+            Kind::Context => &["percent", "bar", "tokens", "size"],
+            Kind::FiveHour | Kind::SevenDay => &["percent", "bar"],
             Kind::Cost => &["usd"],
         }
     }
@@ -103,6 +104,7 @@ fn segment(kind: Kind, session: &Session, config: &Config) -> Option<Segment> {
             let used = window.used_percentage?;
             let text = format.context.render(|key| match key {
                 "percent" => Some(percent(used)),
+                "bar" => graph::bar(used, &config.bar),
                 "tokens" => window.total_input_tokens.map(units::tokens),
                 "size" => window.context_window_size.map(units::tokens),
                 _ => None,
@@ -111,11 +113,11 @@ fn segment(kind: Kind, session: &Session, config: &Config) -> Option<Segment> {
         }
         Kind::FiveHour => {
             let limit = session.rate_limits.as_ref()?.five_hour.as_ref()?;
-            rate_limit(limit, &format.five_hour, colors)?
+            rate_limit(limit, &format.five_hour, config)?
         }
         Kind::SevenDay => {
             let limit = session.rate_limits.as_ref()?.seven_day.as_ref()?;
-            rate_limit(limit, &format.seven_day, colors)?
+            rate_limit(limit, &format.seven_day, config)?
         }
         Kind::Cost => {
             let usd = session.cost.as_ref()?.total_cost_usd?;
@@ -132,14 +134,15 @@ fn segment(kind: Kind, session: &Session, config: &Config) -> Option<Segment> {
 fn rate_limit<'a>(
     limit: &RateLimit,
     template: &Template,
-    colors: &'a Colors,
+    config: &'a Config,
 ) -> Option<(String, &'a Style)> {
     let used = limit.used_percentage?;
     let text = template.render(|key| match key {
         "percent" => Some(percent(used)),
+        "bar" => graph::bar(used, &config.bar),
         _ => None,
     })?;
-    Some((text, usage_style(used, colors)))
+    Some((text, usage_style(used, &config.colors)))
 }
 
 /// A percentage, rounded. `as` saturates, so a negative or out-of-range value can't print as
@@ -271,6 +274,8 @@ mod tests {
         assert_eq!(text(Kind::Cost, "[[{usd}]]"), "[$0.01]");
         assert_eq!(text(Kind::Model, "🤖 {name}"), "🤖 Opus");
         assert_eq!(text(Kind::FiveHour, "five {percent}"), "five 24%");
+        assert_eq!(text(Kind::SevenDay, "{bar} {percent}"), "████░░░░░░ 41%");
+        assert_eq!(text(Kind::Context, "{bar}"), "░░░░░░░░░░");
         // A group with a missing value disappears, and the rest of the segment stays.
         let input = r#"{"context_window": {"used_percentage": 8}}"#;
         assert_eq!(

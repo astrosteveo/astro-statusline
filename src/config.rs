@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 use serde::de::{self, Deserializer};
+use unicode_width::UnicodeWidthStr;
 
 use crate::segments::Kind;
 use crate::style::Style;
@@ -22,6 +23,7 @@ pub struct Config {
     pub segments: Vec<Kind>,
     pub colors: Colors,
     pub format: Format,
+    pub bar: Bar,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -63,14 +65,60 @@ pub struct Format {
     pub cost: Template,
 }
 
+/// How `{bar}` is drawn.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Bar {
+    /// Cells in the bar, from 1 to 100.
+    #[serde(deserialize_with = "bar_width")]
+    pub width: u8,
+    /// The cell for each filled step, one column wide.
+    #[serde(deserialize_with = "cell")]
+    pub full: String,
+    /// The cell for each step not yet filled, one column wide.
+    #[serde(deserialize_with = "cell")]
+    pub empty: String,
+}
+
 impl Default for Config {
     fn default() -> Self {
         Config {
             segments: Kind::ALL.to_vec(),
             colors: Colors::default(),
             format: Format::default(),
+            bar: Bar::default(),
         }
     }
+}
+
+impl Default for Bar {
+    fn default() -> Self {
+        Bar {
+            width: 10,
+            full: "█".to_string(),
+            empty: "░".to_string(),
+        }
+    }
+}
+
+fn bar_width<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u8, D::Error> {
+    let width = u64::deserialize(deserializer)?;
+    u8::try_from(width)
+        .ok()
+        .filter(|width| (1..=100).contains(width))
+        .ok_or_else(|| de::Error::custom(format!("bar width {width} isn't from 1 to 100")))
+}
+
+/// One cell of a bar or graph: text exactly one column wide, so every cell takes the same room
+/// and the line doesn't shift as a value changes.
+fn cell<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    let text = String::deserialize(deserializer)?;
+    if text.width() != 1 || text.chars().any(char::is_control) {
+        return Err(de::Error::custom(format!(
+            "{text:?} isn't one column wide; a cell is a single character such as \"█\" or \"#\""
+        )));
+    }
+    Ok(text)
 }
 
 impl Default for Format {
@@ -210,6 +258,11 @@ mod tests {
             five_hour = "5h {percent}"
             seven_day = "7d {percent}"
             cost = "{usd}"
+
+            [bar]
+            width = 10
+            full = "█"
+            empty = "░"
         "##;
         assert_eq!(parse(documented).unwrap(), Config::default());
         assert_eq!(parse("").unwrap(), Config::default());
@@ -255,6 +308,17 @@ mod tests {
             ),
             ("format.context = \"ctx [{percent}\"", "has a [ with no ]"),
             ("format.context = 5", "invalid type"),
+            ("bar.width = 0", "bar width 0 isn't from 1 to 100"),
+            ("bar.width = 101", "bar width 101 isn't from 1 to 100"),
+            (
+                "bar.width = 4000000000",
+                "bar width 4000000000 isn't from 1 to 100",
+            ),
+            ("bar.width = -1", "invalid value"),
+            ("bar.full = \"\"", "isn't one column wide"),
+            ("bar.full = \"==\"", "isn't one column wide"),
+            ("bar.full = \"日\"", "isn't one column wide"),
+            ("bar.empty = \"\\t\"", "isn't one column wide"),
         ];
         for (text, expected) in cases {
             let error = parse(text).unwrap_err();

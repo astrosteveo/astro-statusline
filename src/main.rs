@@ -1,5 +1,6 @@
 mod config;
 mod git;
+mod graph;
 mod render;
 mod segments;
 mod session;

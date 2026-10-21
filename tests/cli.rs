@@ -178,3 +178,23 @@ fn an_invalid_config_falls_back_to_the_defaults() {
         );
     }
 }
+
+#[test]
+fn draws_templates_and_bars_from_the_config_file() {
+    let config = r##"
+        segments = ["context", "cost"]
+
+        [format]
+        context = "ctx {bar} {percent}[ of {size}]"
+        cost = "[[{usd}]]"
+
+        [bar]
+        width = 4
+        full = "#"
+        empty = "."
+    "##;
+    let input = br#"{"context_window": {"used_percentage": 63}, "cost": {"total_cost_usd": 1.5}}"#;
+    let out = run_with_config(Some(config), input, &[("NO_COLOR", "1")]);
+    assert_eq!(out.stdout, "ctx ##.. 63% │ [$1.50]\n");
+    assert_eq!(out.stderr, "");
+}
