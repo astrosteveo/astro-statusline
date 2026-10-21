@@ -4,7 +4,7 @@
 //! or path can't bleed color or add a row. When the line is too wide, the lowest-priority segments
 //! go first, and a lone segment that still doesn't fit is cut short with an ellipsis.
 
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_width::UnicodeWidthStr;
 
 const SEPARATOR: &str = " │ ";
 const RESET: &str = "\x1b[0m";
@@ -104,14 +104,15 @@ fn truncate(text: &str, max_width: usize) -> String {
     let Some(budget) = max_width.checked_sub(1) else {
         return String::new();
     };
-    let mut width = 0;
-    let mut out: String = text
-        .chars()
-        .take_while(|c| {
-            width += c.width().unwrap_or(0);
-            width <= budget
-        })
-        .collect();
+    let mut out = String::new();
+    for c in text.chars() {
+        let start = out.len();
+        out.push(c);
+        if out.width() > budget {
+            out.truncate(start);
+            break;
+        }
+    }
     out.push('…');
     out
 }
