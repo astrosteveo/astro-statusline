@@ -165,6 +165,7 @@ fn an_invalid_config_falls_back_to_the_defaults() {
         "segments = [\"git\"]",
         "colors.model = \"purple\"",
         "[colors",
+        "format.model = \"{nope}\"",
     ] {
         let out = run_with_config(Some(config), input, &[("NO_COLOR", "1")]);
         assert_eq!(out.stdout, "Opus │ proj\n", "{config}");

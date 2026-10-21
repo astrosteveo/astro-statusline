@@ -9,9 +9,11 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
+use serde::de::{self, Deserializer};
 
 use crate::segments::Kind;
 use crate::style::Style;
+use crate::template::Template;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -38,12 +40,27 @@ pub struct Colors {
     pub usage_high: Style,
 }
 
-/// The text of each part of the line.
+/// The text of each part of the line. Each segment's template is checked against the
+/// placeholders that segment has, so a mistake is reported with its line and column.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Format {
     /// Drawn between segments, in `colors.separator`.
     pub separator: String,
+    #[serde(deserialize_with = "model_template")]
+    pub model: Template,
+    #[serde(deserialize_with = "directory_template")]
+    pub directory: Template,
+    #[serde(deserialize_with = "branch_template")]
+    pub branch: Template,
+    #[serde(deserialize_with = "context_template")]
+    pub context: Template,
+    #[serde(deserialize_with = "five_hour_template")]
+    pub five_hour: Template,
+    #[serde(deserialize_with = "seven_day_template")]
+    pub seven_day: Template,
+    #[serde(deserialize_with = "cost_template")]
+    pub cost: Template,
 }
 
 impl Default for Config {
@@ -58,10 +75,53 @@ impl Default for Config {
 
 impl Default for Format {
     fn default() -> Self {
+        let template = |kind: Kind, text: &str| {
+            Template::parse(text, kind.placeholders()).expect("default templates parse")
+        };
         Format {
             separator: " │ ".to_string(),
+            model: template(Kind::Model, "{name}"),
+            directory: template(Kind::Directory, "{name}"),
+            branch: template(Kind::Branch, "{branch}"),
+            context: template(Kind::Context, "ctx {percent}"),
+            five_hour: template(Kind::FiveHour, "5h {percent}"),
+            seven_day: template(Kind::SevenDay, "7d {percent}"),
+            cost: template(Kind::Cost, "{usd}"),
         }
     }
+}
+
+fn template<'de, D: Deserializer<'de>>(deserializer: D, kind: Kind) -> Result<Template, D::Error> {
+    let text = String::deserialize(deserializer)?;
+    Template::parse(&text, kind.placeholders()).map_err(de::Error::custom)
+}
+
+fn model_template<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Template, D::Error> {
+    template(deserializer, Kind::Model)
+}
+
+fn directory_template<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Template, D::Error> {
+    template(deserializer, Kind::Directory)
+}
+
+fn branch_template<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Template, D::Error> {
+    template(deserializer, Kind::Branch)
+}
+
+fn context_template<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Template, D::Error> {
+    template(deserializer, Kind::Context)
+}
+
+fn five_hour_template<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Template, D::Error> {
+    template(deserializer, Kind::FiveHour)
+}
+
+fn seven_day_template<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Template, D::Error> {
+    template(deserializer, Kind::SevenDay)
+}
+
+fn cost_template<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Template, D::Error> {
+    template(deserializer, Kind::Cost)
 }
 
 impl Default for Colors {
@@ -143,6 +203,13 @@ mod tests {
 
             [format]
             separator = " │ "
+            model = "{name}"
+            directory = "{name}"
+            branch = "{branch}"
+            context = "ctx {percent}"
+            five_hour = "5h {percent}"
+            seven_day = "7d {percent}"
+            cost = "{usd}"
         "##;
         assert_eq!(parse(documented).unwrap(), Config::default());
         assert_eq!(parse("").unwrap(), Config::default());
@@ -178,6 +245,16 @@ mod tests {
             ("colors.model = 208", "invalid type"),
             ("format.separator = 1", "invalid type"),
             ("format.sep = \" \"", "unknown field `sep`"),
+            (
+                "format.model = \"{percent}\"",
+                "unknown placeholder {percent}: expected {name}",
+            ),
+            (
+                "format.cost = \"{percent}\"",
+                "unknown placeholder {percent}: expected {usd}",
+            ),
+            ("format.context = \"ctx [{percent}\"", "has a [ with no ]"),
+            ("format.context = 5", "invalid type"),
         ];
         for (text, expected) in cases {
             let error = parse(text).unwrap_err();

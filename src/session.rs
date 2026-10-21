@@ -44,6 +44,12 @@ pub struct ContextWindow {
     /// Input tokens as a share of the context window, 0 to 100. `null` early in a session.
     #[serde(default, deserialize_with = "lenient")]
     pub used_percentage: Option<f64>,
+    /// Input tokens in the context window, as of the latest response.
+    #[serde(default, deserialize_with = "lenient")]
+    pub total_input_tokens: Option<u64>,
+    /// The most tokens the context window holds.
+    #[serde(default, deserialize_with = "lenient")]
+    pub context_window_size: Option<u64>,
 }
 
 #[derive(Debug, Default, Deserialize)]

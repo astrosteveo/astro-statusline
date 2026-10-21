@@ -4,6 +4,8 @@ mod render;
 mod segments;
 mod session;
 mod style;
+mod template;
+mod units;
 
 use std::env;
 use std::io::{self, Read, Write};
