@@ -2,7 +2,7 @@
 # solo-review settings. Every key is optional; these are the defaults.
 depth: auto            # auto | quick | standard | deep
 security: auto         # auto | always | never
-check: ""              # the one command that builds and tests the project; init fills it in when it can tell
+check: "cargo clippy --all-targets -- -D warnings && cargo test"
 max_nits: 3
 max_rounds: 3          # after this many rounds on one change, step back instead of re-reviewing
 gate: push             # push | off: block Claude's `git push` while Important findings are open
