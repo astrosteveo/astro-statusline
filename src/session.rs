@@ -18,6 +18,13 @@ pub struct Session {
     pub model: Option<Model>,
     #[serde(default, deserialize_with = "lenient")]
     pub workspace: Option<Workspace>,
+    #[serde(default, deserialize_with = "lenient")]
+    pub context_window: Option<ContextWindow>,
+    /// Present only for claude.ai subscribers, after the session's first API response.
+    #[serde(default, deserialize_with = "lenient")]
+    pub rate_limits: Option<RateLimits>,
+    #[serde(default, deserialize_with = "lenient")]
+    pub cost: Option<Cost>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -30,6 +37,35 @@ pub struct Model {
 pub struct Workspace {
     #[serde(default, deserialize_with = "lenient")]
     pub current_dir: Option<PathBuf>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct ContextWindow {
+    /// Input tokens as a share of the context window, 0 to 100. `null` early in a session.
+    #[serde(default, deserialize_with = "lenient")]
+    pub used_percentage: Option<f64>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct RateLimits {
+    #[serde(default, deserialize_with = "lenient")]
+    pub five_hour: Option<RateLimit>,
+    #[serde(default, deserialize_with = "lenient")]
+    pub seven_day: Option<RateLimit>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct RateLimit {
+    /// Share of the window's limit used, 0 to 100.
+    #[serde(default, deserialize_with = "lenient")]
+    pub used_percentage: Option<f64>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct Cost {
+    /// Estimated at list price, so it may differ from the bill.
+    #[serde(default, deserialize_with = "lenient")]
+    pub total_cost_usd: Option<f64>,
 }
 
 impl Session {

@@ -11,6 +11,9 @@ const RESET: &str = "\x1b[0m";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Color {
+    Red,
+    Green,
+    Yellow,
     Blue,
     Cyan,
     Dim,
@@ -19,6 +22,9 @@ pub enum Color {
 impl Color {
     fn sgr(self) -> &'static str {
         match self {
+            Color::Red => "31",
+            Color::Green => "32",
+            Color::Yellow => "33",
             Color::Blue => "34",
             Color::Cyan => "36",
             Color::Dim => "2",
