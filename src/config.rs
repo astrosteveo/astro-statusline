@@ -81,6 +81,10 @@ pub struct Bar {
     /// The cell for each step not yet filled, one column wide.
     #[serde(deserialize_with = "cell")]
     pub empty: String,
+    /// On a rate-limit bar, the cell for where usage would be by now at an even pace to 100% at
+    /// the reset, one column wide.
+    #[serde(deserialize_with = "cell")]
+    pub marker: String,
 }
 
 /// How `{graph}` is drawn.
@@ -171,6 +175,7 @@ impl Default for Bar {
             width: 10,
             full: "█".to_string(),
             empty: "░".to_string(),
+            marker: "┃".to_string(),
         }
     }
 }
@@ -328,6 +333,7 @@ mod tests {
             width = 10
             full = "█"
             empty = "░"
+            marker = "┃"
 
             [graph]
             width = 8
@@ -418,6 +424,7 @@ mod tests {
             ("bar.full = \"==\"", "isn't one column wide"),
             ("bar.full = \"日\"", "isn't one column wide"),
             ("bar.empty = \"\\t\"", "isn't one column wide"),
+            ("bar.marker = \"==\"", "isn't one column wide"),
             ("graph.width = 0", "graph width 0 isn't from 1 to 64"),
             ("graph.width = 65", "graph width 65 isn't from 1 to 64"),
             ("graph.chars = \"#\"", "must be 2 or more characters"),

@@ -2,16 +2,32 @@
 
 use crate::config::{Bar, Graph};
 
-/// A bar `bar.width` cells wide, with one full cell per whole step of `used` out of 100.
-/// `None` when `used` isn't a number.
-pub fn bar(used: f64, bar: &Bar) -> Option<String> {
+/// A bar `bar.width` cells wide, with one full cell per whole step of `used` out of 100. When
+/// `mark` is a number, the cell holding that percentage is `bar.marker` instead, whether it's full
+/// or not. `None` when `used` isn't a number.
+pub fn bar(used: f64, mark: Option<f64>, bar: &Bar) -> Option<String> {
     if !used.is_finite() {
         return None;
     }
     let width = usize::from(bar.width);
-    // `as` truncates toward zero, and `used` is clamped first, so `full` is at most `width`.
-    let full = (used.clamp(0.0, 100.0) / 100.0 * width as f64) as usize;
-    Some(bar.full.repeat(full) + &bar.empty.repeat(width - full))
+    let full = cells(used, width);
+    let mark = mark
+        .filter(|mark| mark.is_finite())
+        .map(|mark| cells(mark, width).min(width - 1));
+    let text = (0..width)
+        .map(|cell| match cell {
+            _ if Some(cell) == mark => bar.marker.as_str(),
+            _ if cell < full => bar.full.as_str(),
+            _ => bar.empty.as_str(),
+        })
+        .collect();
+    Some(text)
+}
+
+/// Whole steps of `percent` out of 100 in `width` cells. `as` truncates toward zero, and
+/// `percent` is clamped first, so this is at most `width`.
+fn cells(percent: f64, width: usize) -> usize {
+    (percent.clamp(0.0, 100.0) / 100.0 * width as f64) as usize
 }
 
 /// How a graph maps values onto its cells.
@@ -65,7 +81,11 @@ mod tests {
     use super::*;
 
     fn draw(used: f64) -> Option<String> {
-        bar(used, &Bar::default())
+        bar(used, None, &Bar::default())
+    }
+
+    fn marked(used: f64, mark: f64) -> Option<String> {
+        bar(used, Some(mark), &Bar::default())
     }
 
     #[test]
@@ -85,6 +105,22 @@ mod tests {
         assert_eq!(draw(1e300).as_deref(), Some("██████████"));
         assert_eq!(draw(f64::NAN), None);
         assert_eq!(draw(f64::INFINITY), None);
+    }
+
+    #[test]
+    fn marks_the_cell_holding_the_mark() {
+        // Under pace, the marker sits among the empty cells; over pace, among the full ones.
+        assert_eq!(marked(41.0, 57.0).as_deref(), Some("████░┃░░░░"));
+        assert_eq!(marked(41.0, 28.0).as_deref(), Some("██┃█░░░░░░"));
+        assert_eq!(marked(0.0, 0.0).as_deref(), Some("┃░░░░░░░░░"));
+        // The end of the window lands on the last cell, not past it.
+        assert_eq!(marked(100.0, 99.99).as_deref(), Some("█████████┃"));
+        assert_eq!(marked(100.0, 100.0).as_deref(), Some("█████████┃"));
+        assert_eq!(marked(10.0, 250.0).as_deref(), Some("█░░░░░░░░┃"));
+        assert_eq!(marked(10.0, -5.0).as_deref(), Some("┃░░░░░░░░░"));
+        // A mark that isn't a number draws no marker; a used value that isn't, no bar.
+        assert_eq!(marked(10.0, f64::NAN).as_deref(), Some("█░░░░░░░░░"));
+        assert_eq!(marked(f64::NAN, 50.0), None);
     }
 
     fn spark(values: &[f64], scale: Scale) -> Option<String> {
@@ -149,7 +185,11 @@ mod tests {
             width: 4,
             full: "=".to_string(),
             empty: " ".to_string(),
+            marker: "|".to_string(),
         };
-        assert_eq!(bar(50.0, &custom).as_deref(), Some("==  "));
+        assert_eq!(bar(50.0, None, &custom).as_deref(), Some("==  "));
+        assert_eq!(bar(50.0, Some(80.0), &custom).as_deref(), Some("== |"));
+        let one = Bar { width: 1, ..custom };
+        assert_eq!(bar(0.0, Some(99.0), &one).as_deref(), Some("|"));
     }
 }

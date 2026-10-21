@@ -127,7 +127,7 @@ fn segment(kind: Kind, env: &Env) -> Option<Segment> {
             let used = window.used_percentage?;
             let text = format.context.render(|key| match key {
                 "percent" => Some(percent(used)),
-                "bar" => graph::bar(used, &config.bar),
+                "bar" => graph::bar(used, None, &config.bar),
                 "graph" => graph(env, |s| s.context, Scale::Percent),
                 "eta" => env.now.and_then(|now| {
                     let samples: Vec<_> = env.history.iter().map(|s| (s.t, s.context)).collect();
@@ -192,7 +192,7 @@ fn rate_limit<'a>(
     let target = now_and_reset.and_then(|(now, resets_at)| predict::target(resets_at, now, window));
     let text = template.render(|key| match key {
         "percent" => Some(percent(used)),
-        "bar" => graph::bar(used, &env.config.bar),
+        "bar" => graph::bar(used, target, &env.config.bar),
         "graph" => graph(env, value, Scale::Percent),
         "resets_in" => now_and_reset
             .and_then(|(now, resets_at)| predict::resets_in(resets_at, now, window))
@@ -407,7 +407,7 @@ mod tests {
         assert_eq!(text(Kind::Cost, "[[{usd}]]"), "[$0.01]");
         assert_eq!(text(Kind::Model, "🤖 {name}"), "🤖 Opus");
         assert_eq!(text(Kind::FiveHour, "five {percent}"), "five 24%");
-        assert_eq!(text(Kind::SevenDay, "{bar} {percent}"), "████░░░░░░ 41%");
+        assert_eq!(text(Kind::SevenDay, "{bar} {percent}"), "██┃█░░░░░░ 41%");
         assert_eq!(text(Kind::Context, "{bar}"), "░░░░░░░░░░");
         // A group with a missing value disappears, and the rest of the segment stays.
         let input = r#"{"context_window": {"used_percentage": 8}}"#;
