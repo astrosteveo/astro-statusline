@@ -115,12 +115,18 @@ fn history(session: &Session) -> Vec<Sample> {
         .map(|i| {
             let share = 0.1 + 0.9 * i as f64 / (SAMPLES - 1) as f64;
             let scale = |value: Option<f64>| value.map(|value| value * share);
+            // The cost graph shows how much each update added, so steady growth would draw every
+            // cell full; spending that varies draws like a real session.
+            let wave = [
+                0.2, 0.6, 0.35, 0.9, 0.5, 1.0, 0.3, 0.7, 0.45, 0.8, 0.55, 0.65,
+            ];
+            let spent: f64 = wave[..=i as usize].iter().sum::<f64>() / wave.iter().sum::<f64>();
             Sample {
                 t: NOW - 150 * (SAMPLES - 1 - i),
                 context: scale(now.context),
                 five_hour: scale(now.five_hour),
                 seven_day: scale(now.seven_day),
-                cost: scale(now.cost),
+                cost: now.cost.map(|cost| cost * spent),
             }
         })
         .collect()

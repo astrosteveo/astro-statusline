@@ -50,6 +50,10 @@ Claude Code would show it, by the same code. The preview changes as you type, be
   limits, without a subscription (no rate limits), a detached `HEAD`, and outside git. `<` and `>` set
   the terminal width it stands in for, marked with `┊`, to see what drops on a narrow terminal. Glyphs
   that terminals draw at different widths, such as Nerd Font icons, are flagged under it.
+- **Presets**: configs to start from: Default (every key at its default, with comments), Plain ASCII
+  (for fonts without box drawing), Powerline (needs a Nerd Font), and Dashboard (two rows with bars,
+  graphs, and predictions). The preview shows the one you're on, and Enter replaces the config with
+  it. Nothing is written until you save.
 - **Settings**: pick a group on the left and press Enter to edit a key on the right. A template lists
   its placeholders, and Tab inserts one. A value with a mistake shows what's wrong and isn't kept until
   it's fixed. A style opens a picker: arrow keys choose from the 256 colors, `b` `d` `i` `u` turn

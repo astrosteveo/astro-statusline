@@ -2,8 +2,9 @@
 //! by the same code as the status line.
 
 mod claude;
-mod doc;
+pub(super) mod doc;
 mod file;
+mod presets;
 mod preview;
 mod ui;
 
@@ -19,6 +20,7 @@ use crate::config::{self, Config, Thresholds};
 use crate::segments::{Item, Kind};
 use crate::style::{Color, Ink, Style};
 use doc::{Doc, Field};
+use presets::{PRESETS, Preset};
 use preview::SCENARIOS;
 
 /// Put at the top of a config file the editor makes.
@@ -74,6 +76,7 @@ fn run(app: &mut App) -> io::Result<()> {
 /// A group of settings in the editor's left-hand list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Section {
+    Presets,
     Layout,
     DropOrder,
     Segment(Kind),
@@ -84,7 +87,8 @@ enum Section {
     ClaudeCode,
 }
 
-const SECTIONS: [Section; 14] = [
+const SECTIONS: [Section; 15] = [
+    Section::Presets,
     Section::Layout,
     Section::DropOrder,
     Section::Segment(Kind::Model),
@@ -141,7 +145,7 @@ impl Section {
                 Field::BarMarker,
             ],
             Section::Graph => vec![Field::GraphWidth, Field::GraphChars],
-            Section::Layout | Section::DropOrder => Vec::new(),
+            Section::Presets | Section::Layout | Section::DropOrder => Vec::new(),
         }
     }
 }
@@ -470,6 +474,9 @@ impl App {
     /// The config the preview draws: the file with the edit under way. An error is why Claude
     /// Code would fall back to the defaults.
     fn preview_config(&self) -> Result<Config, String> {
+        if let Some(preset) = self.previewed_preset() {
+            return config::parse(preset.text).map_err(|error| short_error(&error));
+        }
         let mut doc = self.doc.clone();
         match &self.mode {
             Mode::Edit(edit) => {
@@ -584,6 +591,7 @@ impl App {
         match self.section() {
             Section::Layout => self.layout_key(key),
             Section::DropOrder => self.drop_order_key(key),
+            Section::Presets => self.presets_key(key),
             section => {
                 let fields = section.fields(self.doc.rows().len());
                 let first = section.first_field();
@@ -683,6 +691,32 @@ impl App {
             _ => {}
         }
         self.mode = Mode::Style(picker);
+    }
+
+    /// The preset the preview shows: the one highlighted while the presets are being chosen from.
+    fn previewed_preset(&self) -> Option<&'static Preset> {
+        let choosing = self.section() == Section::Presets
+            && self.focus == Focus::Detail
+            && matches!(self.mode, Mode::Normal);
+        choosing.then(|| &PRESETS[self.cursor.min(PRESETS.len() - 1)])
+    }
+
+    fn presets_key(&mut self, key: KeyEvent) {
+        let last = PRESETS.len() - 1;
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => self.cursor = self.cursor.saturating_sub(1),
+            KeyCode::Down | KeyCode::Char('j') => self.cursor = (self.cursor + 1).min(last),
+            KeyCode::Enter => {
+                let preset = &PRESETS[self.cursor.min(last)];
+                self.doc = Doc::parse(preset.text).expect("presets parse");
+                self.info(format!(
+                    "Applied the {} preset. s saves it, and keeps the previous file as \
+                     config.toml.bak",
+                    preset.name
+                ));
+            }
+            _ => {}
+        }
     }
 
     fn drop_order_key(&mut self, key: KeyEvent) {

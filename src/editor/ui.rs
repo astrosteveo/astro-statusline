@@ -12,6 +12,7 @@ use ratatui::widgets::{Block, Clear, Paragraph, Wrap};
 use unicode_width::UnicodeWidthStr;
 
 use super::doc::Field;
+use super::presets::PRESETS;
 use super::preview::{self, SCENARIOS};
 use super::{
     App, Confirm, Focus, GRID_COLUMNS, LayoutItem, Mode, Picker, SECTIONS, Section, claude,
@@ -153,6 +154,7 @@ fn draw_preview(
 
 fn section_title(section: Section) -> &'static str {
     match section {
+        Section::Presets => "Presets",
         Section::Layout => "Layout",
         Section::DropOrder => "Drop order",
         Section::Segment(kind) => segment_label(kind),
@@ -221,6 +223,7 @@ fn draw_detail(frame: &mut Frame, app: &App, area: Rect) {
     match section {
         Section::Layout => draw_layout(frame, app, inner, focused),
         Section::DropOrder => draw_drop_order(frame, app, inner, focused),
+        Section::Presets => draw_presets(frame, app, inner, focused),
         Section::ClaudeCode => draw_claude(frame, app, inner, focused),
         section => draw_fields(frame, app, inner, section, focused),
     }
@@ -454,6 +457,26 @@ fn draw_fields(frame: &mut Frame, app: &App, area: Rect, section: Section, focus
     }
 }
 
+fn draw_presets(frame: &mut Frame, app: &App, area: Rect, focused: bool) {
+    let mut lines: Vec<Line> = Vec::new();
+    for (i, preset) in PRESETS.iter().enumerate() {
+        let selected = focused && i == app.cursor.min(PRESETS.len() - 1);
+        let style = if selected { highlight(true) } else { bold() };
+        lines.push(Line::from(vec![
+            Span::styled(format!(" {:<LABEL_WIDTH$}", preset.name), style),
+            Span::raw(" "),
+            Span::styled(preset.about, dim()),
+        ]));
+    }
+    lines.push(Line::raw(""));
+    lines.push(Line::styled(
+        " The preview shows the preset you're on. Enter replaces the config with it; nothing is \
+         written until you save, and saving keeps the previous file as config.toml.bak.",
+        dim(),
+    ));
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
+}
+
 fn draw_drop_order(frame: &mut Frame, app: &App, area: Rect, focused: bool) {
     let sequence = app.doc.drop_sequence();
     let mut lines: Vec<Line> = sequence
@@ -624,6 +647,9 @@ fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
         }
         (Mode::Normal, Focus::Detail, Section::Layout) => {
             "↑↓ choose  J K move  n new row  f fill  d remove  enter open  r reset  ← back  s save"
+        }
+        (Mode::Normal, Focus::Detail, Section::Presets) => {
+            "↑↓ choose and preview  enter apply  ← back  s save  q quit"
         }
         (Mode::Normal, Focus::Detail, Section::DropOrder) => {
             "↑↓ choose  J K move  r reset to default  ← back  s save  q quit"

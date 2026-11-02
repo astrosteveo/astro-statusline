@@ -337,6 +337,37 @@ fn arranges_segments_into_rows() {
 }
 
 #[test]
+fn previews_and_applies_a_preset() {
+    let mut f = Fixture::new(Some("# Mine.\n[bar]\nwidth = 4\n"));
+    f.open(Section::Presets);
+    assert_eq!(f.app.section(), SECTIONS[0]);
+    // Dashboard, the fourth: the preview shows its two rows before anything changes.
+    f.press(&[KeyCode::Down, KeyCode::Down, KeyCode::Down]);
+    let screen = f.screen(110, 30);
+    assert!(screen.contains("Opus 5.5 · my-project · main"), "{screen}");
+    assert!(screen.contains("42% ▂▂▂▃▃▃▄▄ full in 42m"), "{screen}");
+    assert!(!f.app.dirty());
+    f.press(&[KeyCode::Enter]);
+    assert!(f.app.dirty());
+    assert!(f.message().starts_with("Applied the Dashboard preset"));
+    assert!(
+        f.app
+            .doc
+            .text()
+            .starts_with("# astro-statusline: the Dashboard preset.")
+    );
+    // Leaving the presets, the preview shows the applied config.
+    f.press(&[KeyCode::Left]);
+    assert!(f.screen(110, 30).contains("Opus 5.5 · my-project · main"));
+    f.typing("s");
+    assert_eq!(f.file(), presets::PRESETS[3].text);
+    assert_eq!(
+        fs::read_to_string(f.app.path.with_file_name("config.toml.bak")).unwrap(),
+        "# Mine.\n[bar]\nwidth = 4\n"
+    );
+}
+
+#[test]
 fn adds_moves_and_removes_a_fill() {
     let mut f = Fixture::new(Some("segments = [\"model\", \"directory\", \"cost\"]\n"));
     f.open(Section::Layout);
