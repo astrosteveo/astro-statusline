@@ -13,17 +13,20 @@ mod units;
 
 use std::env;
 use std::io::{self, Read, Write};
+use std::process::ExitCode;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use config::Config;
-use segments::Env;
+use segments::{Env, Kind};
 use session::Session;
 
-/// Claude Code draws the status line two columns in from each edge (measured in fullscreen
-/// rendering), and cuts off anything wider. A `padding` set in settings takes more.
-const EDGE_RESERVE: usize = 4;
+fn main() -> ExitCode {
+    status_line();
+    // Claude Code shows the line only after a zero exit.
+    ExitCode::SUCCESS
+}
 
-fn main() {
+fn status_line() {
     let mut input = Vec::new();
     // A read error leaves whatever arrived; anything unparsable renders as an empty session,
     // never as an error.
@@ -50,25 +53,18 @@ fn main() {
         let _ = writeln!(io::stderr().lock(), "astro-statusline: {error}");
     }
 
+    let branch = config
+        .shows(Kind::Branch)
+        .then(|| session.current_dir().and_then(git::head))
+        .flatten();
     let env = Env {
         session: &session,
         config: &config,
         now,
         history: &history,
+        branch: branch.as_deref(),
     };
-    let (max_width, color) = (max_width(), color_enabled());
-    // Claude Code shows each line as a row. A row with nothing to show is left out, so rows appear
-    // as their data arrives.
-    let lines: Vec<String> = config
-        .rows()
-        .into_iter()
-        .map(|kinds| {
-            let segments = segments::row(&env, kinds);
-            let (separator, style) = (&config.format.separator, &config.colors.separator);
-            render::render(segments, separator, style, max_width, color)
-        })
-        .filter(|line| !line.is_empty())
-        .collect();
+    let lines = segments::lines(&env, max_width(), color_enabled());
 
     // With every row empty this prints one empty line, which clears the status line. Claude Code
     // shows only stdout, and only after a zero exit, so a failed write has nowhere useful to go.
@@ -85,7 +81,7 @@ fn now() -> Option<i64> {
 /// command's output is captured and can't query the terminal itself.
 fn max_width() -> Option<usize> {
     let columns: usize = env::var("COLUMNS").ok()?.trim().parse().ok()?;
-    (columns > 0).then(|| columns.saturating_sub(EDGE_RESERVE))
+    (columns > 0).then(|| render::max_width(columns))
 }
 
 /// Color is on unless `NO_COLOR` is set to a non-empty value (https://no-color.org).

@@ -10,6 +10,15 @@ use crate::style::Style;
 
 const RESET: &str = "\x1b[0m";
 
+/// Claude Code draws the status line two columns in from each edge (measured in fullscreen
+/// rendering), and cuts off anything wider. A `padding` set in settings takes more.
+pub const EDGE_RESERVE: usize = 4;
+
+/// The widest a line may be in a terminal `columns` wide.
+pub fn max_width(columns: usize) -> usize {
+    columns.saturating_sub(EDGE_RESERVE)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Segment {
     pub text: String,

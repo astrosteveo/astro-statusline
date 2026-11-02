@@ -4,11 +4,10 @@
 use serde::Deserialize;
 
 use crate::config::{Colors, Config};
-use crate::git;
 use crate::graph::{self, Scale};
 use crate::history::Sample;
 use crate::predict;
-use crate::render::Segment;
+use crate::render::{self, Segment};
 use crate::session::{RateLimit, Session};
 use crate::style::Style;
 use crate::template::Template;
@@ -84,6 +83,28 @@ pub struct Env<'a> {
     /// The session's recent samples, oldest first, ending with the current values. Empty when
     /// no segment shown needs them.
     pub history: &'a [Sample],
+    /// The checked-out branch, or `None` outside a repository or when no row shows it.
+    pub branch: Option<&'a str>,
+}
+
+/// Each row of the status line, top to bottom, no wider than `max_width` when it is given.
+/// A row with nothing to show is left out, so rows appear as their data arrives.
+pub fn lines(env: &Env, max_width: Option<usize>, color: bool) -> Vec<String> {
+    let (format, colors) = (&env.config.format, &env.config.colors);
+    env.config
+        .rows()
+        .into_iter()
+        .map(|kinds| {
+            render::render(
+                row(env, kinds),
+                &format.separator,
+                &colors.separator,
+                max_width,
+                color,
+            )
+        })
+        .filter(|line| !line.is_empty())
+        .collect()
 }
 
 /// The segments of one row, in its order.
@@ -115,9 +136,9 @@ fn segment(kind: Kind, env: &Env) -> Option<Segment> {
             (text?, &colors.directory)
         }
         Kind::Branch => {
-            let branch = git::head(session.current_dir()?)?;
+            let branch = env.branch?;
             let text = format.branch.render(|key| match key {
-                "branch" => Some(branch.clone()),
+                "branch" => Some(branch.to_string()),
                 _ => None,
             });
             (text?, &colors.branch)
@@ -294,6 +315,7 @@ mod tests {
             config,
             now: Some(NOW),
             history: &[Sample::new(&session, NOW)],
+            branch: None,
         })
     }
 
@@ -366,15 +388,9 @@ mod tests {
 
     #[test]
     fn fills_every_placeholder_a_segment_allows() {
-        let repo = tempfile::tempdir().unwrap();
-        std::fs::create_dir(repo.path().join(".git")).unwrap();
-        std::fs::write(repo.path().join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
         // Usage high enough that both limits are on pace to run out, and a session long enough
         // to have a cost rate.
-        let input = FULL
-            .replace("/home/me/proj", &repo.path().display().to_string())
-            .replace("23.5", "90")
-            .replace("45000", "3600000");
+        let input = FULL.replace("23.5", "90").replace("45000", "3600000");
         let session = Session::parse(input.as_bytes());
         // Context lower ten minutes ago, so it has a fill rate.
         let earlier = Sample {
@@ -391,6 +407,7 @@ mod tests {
                     config: &config,
                     now: Some(NOW),
                     history: &history,
+                    branch: Some("main"),
                 };
                 assert!(!all(&env).is_empty(), "{kind:?} left {{{name}}} empty");
             }
@@ -470,6 +487,7 @@ mod tests {
                 config: &config,
                 now,
                 history: &[],
+                branch: None,
             })
             .pop()
             .map(|s| s.text)
@@ -512,6 +530,7 @@ mod tests {
             config: &config,
             now: Some(NOW),
             history: &history,
+            branch: None,
         });
         assert_eq!(segments[0].text, "80% ▁▇");
     }
@@ -531,6 +550,7 @@ mod tests {
                 config: &config,
                 now: Some(NOW),
                 history,
+                branch: None,
             })
             .remove(0)
             .text

@@ -4,7 +4,7 @@
 
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 use serde::de::{self, Deserializer};
@@ -110,6 +110,14 @@ impl Config {
         }
     }
 
+    /// Whether any row shows `kind`.
+    pub fn shows(&self, kind: Kind) -> bool {
+        self.rows()
+            .into_iter()
+            .flatten()
+            .any(|&shown| shown == kind)
+    }
+
     /// Whether any segment shown needs the session's history: for a graph, or for the context
     /// segment's fill prediction.
     pub fn needs_history(&self) -> bool {
@@ -145,26 +153,34 @@ impl Default for Graph {
 }
 
 fn graph_width<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u8, D::Error> {
-    let width = u64::deserialize(deserializer)?;
+    check_graph_width(u64::deserialize(deserializer)?).map_err(de::Error::custom)
+}
+
+/// Checks `[graph] width`.
+pub fn check_graph_width(width: u64) -> Result<u8, String> {
     u8::try_from(width)
         .ok()
         .filter(|width| (1..=history::MAX_SAMPLES as u8).contains(width))
         .ok_or_else(|| {
-            de::Error::custom(format!(
+            format!(
                 "graph width {width} isn't from 1 to {}",
                 history::MAX_SAMPLES
-            ))
+            )
         })
 }
 
 fn graph_chars<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<char>, D::Error> {
-    let text = String::deserialize(deserializer)?;
+    check_graph_chars(&String::deserialize(deserializer)?).map_err(de::Error::custom)
+}
+
+/// Checks `[graph] chars`.
+pub fn check_graph_chars(text: &str) -> Result<Vec<char>, String> {
     let chars: Vec<char> = text.chars().collect();
     if chars.len() < 2 || chars.iter().any(|&c| c.width() != Some(1)) {
-        return Err(de::Error::custom(format!(
+        return Err(format!(
             "graph chars {text:?} must be 2 or more characters, each one column wide, such as \
              \"▁▂▃▄▅▆▇█\""
-        )));
+        ));
     }
     Ok(chars)
 }
@@ -181,23 +197,32 @@ impl Default for Bar {
 }
 
 fn bar_width<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u8, D::Error> {
-    let width = u64::deserialize(deserializer)?;
+    check_bar_width(u64::deserialize(deserializer)?).map_err(de::Error::custom)
+}
+
+/// Checks `[bar] width`.
+pub fn check_bar_width(width: u64) -> Result<u8, String> {
     u8::try_from(width)
         .ok()
         .filter(|width| (1..=100).contains(width))
-        .ok_or_else(|| de::Error::custom(format!("bar width {width} isn't from 1 to 100")))
+        .ok_or_else(|| format!("bar width {width} isn't from 1 to 100"))
 }
 
-/// One cell of a bar or graph: text exactly one column wide, so every cell takes the same room
-/// and the line doesn't shift as a value changes.
 fn cell<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
     let text = String::deserialize(deserializer)?;
-    if text.width() != 1 || text.chars().any(char::is_control) {
-        return Err(de::Error::custom(format!(
-            "{text:?} isn't one column wide; a cell is a single character such as \"█\" or \"#\""
-        )));
-    }
+    check_cell(&text).map_err(de::Error::custom)?;
     Ok(text)
+}
+
+/// Checks one cell of a bar: text exactly one column wide, so every cell takes the same room and
+/// the line doesn't shift as a value changes.
+pub fn check_cell(text: &str) -> Result<(), String> {
+    if text.width() != 1 || text.chars().any(char::is_control) {
+        return Err(format!(
+            "{text:?} isn't one column wide; a cell is a single character such as \"█\" or \"#\""
+        ));
+    }
+    Ok(())
 }
 
 impl Default for Format {
@@ -267,13 +292,15 @@ impl Default for Colors {
     }
 }
 
+/// Where the config file is, or `None` without a usable home or config directory.
+pub fn path() -> Option<PathBuf> {
+    dirs::config().map(|dir| dir.join("config.toml"))
+}
+
 /// Reads the config file, or the defaults when there is none. An error names the file and what
 /// is wrong with it.
 pub fn load() -> Result<Config, String> {
-    dirs::config().map_or_else(
-        || Ok(Config::default()),
-        |dir| read(&dir.join("config.toml")),
-    )
+    path().map_or_else(|| Ok(Config::default()), |path| read(&path))
 }
 
 fn read(path: &Path) -> Result<Config, String> {
@@ -286,7 +313,7 @@ fn read(path: &Path) -> Result<Config, String> {
 }
 
 /// Parses the text of a config file.
-fn parse(text: &str) -> Result<Config, String> {
+pub fn parse(text: &str) -> Result<Config, String> {
     // A parse error ends in a newline.
     let config: Config =
         toml::from_str(text).map_err(|error| error.to_string().trim_end().to_string())?;
