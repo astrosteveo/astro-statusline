@@ -310,6 +310,25 @@ fn scrolls_the_settings_list_to_the_chosen_section() {
 }
 
 #[test]
+fn caps_a_segment_s_width() {
+    let mut f = Fixture::new(None);
+    f.open(Section::Segment(Kind::Directory));
+    assert!(f.screen(110, 30).contains("Max width     no limit"));
+    // Template, style, max width.
+    f.press(&[KeyCode::Down, KeyCode::Down, KeyCode::Enter])
+        .typing("0");
+    assert!(
+        f.screen(110, 30)
+            .contains("max_width 0 isn't from 1 to 500")
+    );
+    f.press(&[KeyCode::Backspace])
+        .typing("5")
+        .press(&[KeyCode::Enter]);
+    assert_eq!(f.app.doc.text(), "[max_width]\ndirectory = 5\n");
+    assert!(f.screen(110, 30).contains("Opus 5.5 │ my-p… │ main"));
+}
+
+#[test]
 fn shows_a_segment_only_from_a_value() {
     let mut f = Fixture::new(None);
     f.open(Section::Segment(Kind::Cost));

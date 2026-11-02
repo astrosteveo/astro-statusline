@@ -243,7 +243,7 @@ fn segment(kind: Kind, env: &Env) -> Option<Segment> {
     let pieces = text
         .into_iter()
         .map(|(text, style)| (text, style.map_or_else(|| base.clone(), resolve)));
-    Some(Segment::from_pieces(pieces, config.priority(kind)))
+    Some(Segment::from_pieces(pieces, config.priority(kind)).capped(config.max_width.get(kind)))
 }
 
 /// The rate limit `kind` over a `window` seconds long, whose history `value` picks out of each
@@ -674,6 +674,29 @@ mod tests {
         assert_eq!(color("79.9"), style("yellow"));
         assert_eq!(color("80"), style("red"));
         assert_eq!(color("100"), style("red"));
+    }
+
+    #[test]
+    fn cuts_a_segment_to_its_max_width() {
+        let config = crate::config::parse(
+            "segments = [\"model\", \"branch\"]\nmax_width.branch = 12\nmax_width.model = 4",
+        )
+        .unwrap();
+        let session = Session::parse(FULL.as_bytes());
+        let env = Env {
+            session: &session,
+            config: &config,
+            now: Some(NOW),
+            history: &[],
+            branch: Some("feat/a-very-long-branch"),
+        };
+        assert_eq!(lines(&env, None, false), ["Opus │ feat/a-very…"]);
+        // A segment that fits is left whole.
+        let env = Env {
+            branch: Some("main"),
+            ..env
+        };
+        assert_eq!(lines(&env, None, false), ["Opus │ main"]);
     }
 
     #[test]

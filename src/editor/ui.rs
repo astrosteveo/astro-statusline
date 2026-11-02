@@ -245,6 +245,7 @@ fn field_label(field: Field, rows: usize) -> String {
         Field::Separator(row) => return format!("Row {}", row + 1),
         Field::Padding => "Padding",
         Field::ShowFrom(_) => "Show from",
+        Field::MaxWidth(_) => "Max width",
         Field::BarWidth | Field::GraphWidth => "Width",
         Field::BarFull => "Full cell",
         Field::BarEmpty => "Empty cell",
@@ -263,7 +264,8 @@ fn value_spans(field: Field, text: &str, usage: &crate::style::Style) -> Vec<Spa
         | Field::GraphWidth
         | Field::Padding
         | Field::Thresholds(_)
-        | Field::ShowFrom(_) => {
+        | Field::ShowFrom(_)
+        | Field::MaxWidth(_) => {
             vec![Span::raw(text.to_string())]
         }
         Field::Style(_) => {
@@ -318,7 +320,11 @@ fn draw_fields(frame: &mut Frame, app: &App, area: Rect, section: Section, focus
                 let shown = app.doc.get(field);
                 let mut spans = vec![label, Span::raw(" ")];
                 if field.optional() && !shown.set {
-                    spans.push(Span::styled("always", dim()));
+                    let unset = match field {
+                        Field::MaxWidth(_) => "no limit",
+                        _ => "always",
+                    };
+                    spans.push(Span::styled(unset, dim()));
                 } else {
                     spans.extend(value_spans(field, &shown.text, &usage_sample(app)));
                 }

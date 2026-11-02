@@ -32,6 +32,8 @@ pub enum Field {
     Thresholds(Kind),
     /// A segment's `[show_from]`, which has no default.
     ShowFrom(Kind),
+    /// A segment's `[max_width]`, which has no default.
+    MaxWidth(Kind),
 }
 
 /// The TOML type a field is written as.
@@ -60,12 +62,15 @@ impl Field {
             Field::GraphChars => ("graph", "chars"),
             Field::Thresholds(kind) => ("thresholds", kind.name()),
             Field::ShowFrom(kind) => ("show_from", kind.name()),
+            Field::MaxWidth(kind) => ("max_width", kind.name()),
         }
     }
 
     fn shape(self) -> Shape {
         match self {
-            Field::BarWidth | Field::GraphWidth | Field::Padding => Shape::Integer,
+            Field::BarWidth | Field::GraphWidth | Field::Padding | Field::MaxWidth(_) => {
+                Shape::Integer
+            }
             Field::ShowFrom(_) => Shape::Number,
             Field::Thresholds(_) => Shape::List,
             _ => Shape::Text,
@@ -74,7 +79,7 @@ impl Field {
 
     /// Whether the field has no default, so that leaving it empty takes it out of the file.
     pub fn optional(self) -> bool {
-        matches!(self, Field::ShowFrom(_))
+        matches!(self, Field::ShowFrom(_) | Field::MaxWidth(_))
     }
 
     /// Checks `text` as the field's value, giving the TOML value to write or what is wrong.
@@ -103,7 +108,7 @@ impl Field {
             Field::Separator(_) => Ok(()),
             Field::BarFull | Field::BarEmpty | Field::BarMarker => config::check_cell(text),
             Field::GraphChars => config::check_graph_chars(text).map(drop),
-            Field::BarWidth | Field::GraphWidth | Field::Padding => {
+            Field::BarWidth | Field::GraphWidth | Field::Padding | Field::MaxWidth(_) => {
                 let number: u64 = text
                     .trim()
                     .parse()
@@ -111,9 +116,10 @@ impl Field {
                 match self {
                     Field::BarWidth => config::check_bar_width(number).map(drop),
                     Field::GraphWidth => config::check_graph_width(number).map(drop),
+                    Field::MaxWidth(_) => config::check_max_width(number).map(drop),
                     _ => config::check_padding(number).map(drop),
                 }?;
-                // Checked to be at most 100 above.
+                // Checked to be at most 500 above.
                 return Ok(Value::from(number as i64));
             }
             Field::Thresholds(_) => {

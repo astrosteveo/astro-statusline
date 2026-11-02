@@ -55,6 +55,10 @@ seven_day = [50, 80]
 # dollars for cost, such as seven_day = 50 or cost = 1.0. A segment not named here always shows.
 [show_from]
 
+# The most columns a segment may take, cut short with … beyond, such as branch = 20. A segment
+# not named here takes what it needs.
+[max_width]
+
 [format]
 # Or a list, one for each row, such as [" │ ", " · "]. Rows past its end take the last.
 separator = " │ "
@@ -93,9 +97,59 @@ pub struct Config {
     pub colors: Colors,
     pub thresholds: Thresholds,
     pub show_from: ShowFrom,
+    pub max_width: MaxWidth,
     pub format: Format,
     pub bar: Bar,
     pub graph: Graph,
+}
+
+/// The most columns each segment may take; a longer one is cut short with an ellipsis. A segment
+/// without one takes what it needs.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct MaxWidth {
+    #[serde(deserialize_with = "max_width")]
+    pub model: Option<u16>,
+    #[serde(deserialize_with = "max_width")]
+    pub directory: Option<u16>,
+    #[serde(deserialize_with = "max_width")]
+    pub branch: Option<u16>,
+    #[serde(deserialize_with = "max_width")]
+    pub context: Option<u16>,
+    #[serde(deserialize_with = "max_width")]
+    pub five_hour: Option<u16>,
+    #[serde(deserialize_with = "max_width")]
+    pub seven_day: Option<u16>,
+    #[serde(deserialize_with = "max_width")]
+    pub cost: Option<u16>,
+}
+
+impl MaxWidth {
+    pub fn get(&self, kind: Kind) -> Option<u16> {
+        match kind {
+            Kind::Model => self.model,
+            Kind::Directory => self.directory,
+            Kind::Branch => self.branch,
+            Kind::Context => self.context,
+            Kind::FiveHour => self.five_hour,
+            Kind::SevenDay => self.seven_day,
+            Kind::Cost => self.cost,
+        }
+    }
+}
+
+fn max_width<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<u16>, D::Error> {
+    check_max_width(u64::deserialize(deserializer)?)
+        .map(Some)
+        .map_err(de::Error::custom)
+}
+
+/// Checks a `[max_width]` value.
+pub fn check_max_width(width: u64) -> Result<u16, String> {
+    u16::try_from(width)
+        .ok()
+        .filter(|width| (1..=500).contains(width))
+        .ok_or_else(|| format!("max_width {width} isn't from 1 to 500"))
 }
 
 /// The value from which a segment shows: a percent for the context and rate limits, dollars for
@@ -841,6 +895,13 @@ mod tests {
                 "usage is only for the context and rate-limit",
             ),
             ("format.cost = \"{usd:purple}\"", "unknown style \"purple\""),
+            ("max_width.git = 5", "unknown field `git`"),
+            ("max_width.branch = 0", "max_width 0 isn't from 1 to 500"),
+            (
+                "max_width.branch = 501",
+                "max_width 501 isn't from 1 to 500",
+            ),
+            ("max_width.branch = 2.5", "invalid type"),
             ("show_from.model = 1", "unknown field `model`"),
             (
                 "show_from.cost = -1",

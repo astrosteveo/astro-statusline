@@ -32,6 +32,8 @@ pub struct Segment {
     pub pieces: Vec<Piece>,
     /// When the line is too wide, lower priorities are dropped first.
     pub priority: u8,
+    /// The most columns the segment may take, whatever room the line has.
+    pub max_width: Option<u16>,
 }
 
 impl Segment {
@@ -52,7 +54,16 @@ impl Segment {
             .into_iter()
             .map(|(text, style)| Piece { text, style })
             .collect();
-        Segment { pieces, priority }
+        Segment {
+            pieces,
+            priority,
+            max_width: None,
+        }
+    }
+
+    /// The segment cut to at most `max_width` columns when it's drawn.
+    pub fn capped(self, max_width: Option<u16>) -> Self {
+        Segment { max_width, ..self }
     }
 
     /// The segment's text, without its styles.
@@ -68,8 +79,8 @@ impl Segment {
         self.pieces.iter().map(|piece| piece.text.width()).sum()
     }
 
-    /// The segment with control characters stripped, empty pieces dropped, and neighbours of the
-    /// same style joined, so each style is turned on once.
+    /// The segment with control characters stripped, empty pieces dropped, neighbours of the
+    /// same style joined, so each style is turned on once, and cut to its `max_width`.
     fn cleaned(self) -> Segment {
         let mut pieces: Vec<Piece> = Vec::new();
         for piece in self.pieces {
@@ -80,7 +91,13 @@ impl Segment {
                 _ => pieces.push(Piece { text, ..piece }),
             }
         }
-        Segment { pieces, ..self }
+        let mut segment = Segment { pieces, ..self };
+        if let Some(max_width) = segment.max_width.map(usize::from)
+            && segment.width() > max_width
+        {
+            truncate(&mut segment.pieces, max_width);
+        }
+        segment
     }
 }
 

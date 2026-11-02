@@ -114,6 +114,10 @@ seven_day = [50, 80]
 # dollars for cost, such as seven_day = 50 or cost = 1.0. A segment not named here always shows.
 [show_from]
 
+# The most columns a segment may take, cut short with … beyond, such as branch = 20. A segment
+# not named here takes what it needs.
+[max_width]
+
 [format]
 # Or a list, one for each row, such as [" │ ", " · "]. Rows past its end take the last.
 separator = " │ "
@@ -214,6 +218,9 @@ that's missing hides its whole segment. To write a literal brace or bracket, dou
 `[show_from]` hides a segment until its value reaches a number: `seven_day = 50` shows the 7-day
 limit from 50% used, and `cost = 1.0` shows the cost from $1. It compares the exact value, before
 rounding, so `seven_day = 24` still hides 23.5%, which shows as `24%`.
+
+`[max_width]` cuts a segment to a number of columns, ending in `…`, wherever it is and however wide
+the terminal: `branch = 20` draws `feat/a-very-long-br…` for a long branch.
 
 For example, two rows with bars, graphs, and predictions:
 

@@ -120,6 +120,7 @@ impl Section {
                 if !matches!(kind, Kind::Model | Kind::Directory | Kind::Branch) {
                     fields.push(Field::ShowFrom(kind));
                 }
+                fields.push(Field::MaxWidth(kind));
                 fields
             }
             Section::Separator => {
