@@ -39,6 +39,24 @@ impl Kind {
         Kind::Cost,
     ];
 
+    /// The segment's name in the config file.
+    pub fn name(self) -> &'static str {
+        match self {
+            Kind::Model => "model",
+            Kind::Directory => "directory",
+            Kind::Branch => "branch",
+            Kind::Context => "context",
+            Kind::FiveHour => "five_hour",
+            Kind::SevenDay => "seven_day",
+            Kind::Cost => "cost",
+        }
+    }
+
+    /// The segment the config file calls `name`.
+    pub fn from_name(name: &str) -> Option<Kind> {
+        Kind::ALL.into_iter().find(|kind| kind.name() == name)
+    }
+
     /// The placeholders this segment's format template can use. `segment` fills each one.
     pub fn placeholders(self) -> &'static [&'static str] {
         match self {
@@ -355,6 +373,16 @@ mod tests {
         draw(input, &with_template(kind, template))
             .pop()
             .map(|s| s.text)
+    }
+
+    #[test]
+    fn names_each_kind_as_the_config_file_does() {
+        for kind in Kind::ALL {
+            let parsed: Kind = serde_json::from_value(kind.name().into()).unwrap();
+            assert_eq!(parsed, kind);
+            assert_eq!(Kind::from_name(kind.name()), Some(kind));
+        }
+        assert_eq!(Kind::from_name("git"), None);
     }
 
     #[test]

@@ -378,3 +378,22 @@ fn draws_one_line_per_row_and_fits_each() {
     let out = run_with_config(Some("lines = []"), full, &[]);
     assert_eq!(out.stdout, "\n");
 }
+
+#[test]
+fn the_config_editor_needs_a_terminal() {
+    let config_home = tempfile::tempdir().expect("create a config dir");
+    let output = Command::new(env!("CARGO_BIN_EXE_astro-statusline"))
+        .arg("config")
+        .env("XDG_CONFIG_HOME", config_home.path())
+        .stdin(Stdio::null())
+        .output()
+        .expect("run the binary");
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).expect("utf-8 stderr");
+    assert_eq!(
+        stderr,
+        "astro-statusline config: needs a terminal to run in\n"
+    );
+    assert!(!config_home.path().join("astro-statusline").exists());
+}

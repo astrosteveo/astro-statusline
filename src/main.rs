@@ -1,5 +1,6 @@
 mod config;
 mod dirs;
+mod editor;
 mod git;
 mod graph;
 mod history;
@@ -21,6 +22,9 @@ use segments::{Env, Kind};
 use session::Session;
 
 fn main() -> ExitCode {
+    if env::args_os().nth(1).is_some_and(|arg| arg == "config") {
+        return editor::main();
+    }
     status_line();
     // Claude Code shows the line only after a zero exit.
     ExitCode::SUCCESS
