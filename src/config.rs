@@ -16,6 +16,45 @@ use crate::segments::Kind;
 use crate::style::Style;
 use crate::template::Template;
 
+/// Every key at its default, as the README documents them. The editor shows a key the file leaves
+/// out with its text from here.
+pub const DEFAULTS: &str = r##"# The segments to show, left to right. Leave one out to hide it.
+segments = ["model", "directory", "branch", "context", "five_hour", "seven_day", "cost"]
+# Or several rows, top to bottom, instead of segments:
+# lines = [["model", "directory", "branch"], ["context", "five_hour", "seven_day", "cost"]]
+
+[colors]
+model = "cyan"
+directory = "blue"
+branch = "magenta"
+cost = "dim"
+separator = "dim"
+# Context and rate-limit percentages: below 50%, below 80%, and from 80% up.
+usage_low = "green"
+usage_medium = "yellow"
+usage_high = "red"
+
+[format]
+separator = " │ "
+model = "{name}"
+directory = "{name}"
+branch = "{branch}"
+context = "ctx {percent}"
+five_hour = "5h {percent}"
+seven_day = "7d {percent}"
+cost = "{usd}"
+
+[bar]
+width = 10
+full = "█"
+empty = "░"
+marker = "┃"
+
+[graph]
+width = 8
+chars = "▁▂▃▄▅▆▇█"
+"##;
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
@@ -333,40 +372,11 @@ mod tests {
 
     #[test]
     fn the_documented_defaults_are_the_defaults() {
-        let documented = r##"
-            segments = ["model", "directory", "branch", "context", "five_hour", "seven_day", "cost"]
-
-            [colors]
-            model = "cyan"
-            directory = "blue"
-            branch = "magenta"
-            cost = "dim"
-            separator = "dim"
-            usage_low = "green"
-            usage_medium = "yellow"
-            usage_high = "red"
-
-            [format]
-            separator = " │ "
-            model = "{name}"
-            directory = "{name}"
-            branch = "{branch}"
-            context = "ctx {percent}"
-            five_hour = "5h {percent}"
-            seven_day = "7d {percent}"
-            cost = "{usd}"
-
-            [bar]
-            width = 10
-            full = "█"
-            empty = "░"
-            marker = "┃"
-
-            [graph]
-            width = 8
-            chars = "▁▂▃▄▅▆▇█"
-        "##;
-        let documented = parse(documented).unwrap();
+        assert!(
+            include_str!("../README.md").contains(&format!("```toml\n{DEFAULTS}```")),
+            "the README's defaults differ from DEFAULTS"
+        );
+        let documented = parse(DEFAULTS).unwrap();
         assert_eq!(documented.rows(), Config::default().rows());
         assert_eq!(
             Config {
