@@ -448,6 +448,9 @@ fn sets_up_claude_code() {
 #[test]
 fn shows_a_question_s_keys_however_long_its_text() {
     let mut f = Fixture::new(None);
+    let settings = f.dir.path().join("claude/settings.json");
+    fs::create_dir_all(settings.parent().unwrap()).unwrap();
+    fs::write(&settings, "{}").unwrap();
     f.app.exe = PathBuf::from(format!(
         "/home/someone/{}/target/debug/astro-statusline",
         "deep/".repeat(12)
@@ -456,7 +459,24 @@ fn shows_a_question_s_keys_however_long_its_text() {
     for (width, height) in [(110, 32), (72, 20)] {
         let screen = f.screen(width, height);
         assert!(screen.contains("y change it"), "{screen}");
+        // With room for all of it, none of the text is cut off.
+        if height > 20 {
+            assert!(screen.contains("kept as settings.json.bak."), "{screen}");
+        }
     }
+}
+
+#[test]
+fn counts_lines_as_they_wrap_at_words() {
+    assert_eq!(ui::wrapped_lines("", 10), 1);
+    assert_eq!(ui::wrapped_lines("one two", 7), 1);
+    assert_eq!(ui::wrapped_lines("one two three", 7), 2);
+    // A word longer than the width is split across lines.
+    assert_eq!(ui::wrapped_lines("abcdefghijklmnop", 5), 4);
+    assert_eq!(ui::wrapped_lines("ab abcdefghij", 5), 3);
+    // An indent takes room on the first line.
+    assert_eq!(ui::wrapped_lines("  abc de", 7), 2);
+    assert_eq!(ui::wrapped_lines("  abc de", 8), 1);
 }
 
 #[test]
