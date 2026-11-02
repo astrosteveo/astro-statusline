@@ -85,6 +85,9 @@ segments = ["model", "directory", "branch", "context", "five_hour", "seven_day",
 # Segments that drop first when a row is too wide, in this order. The rest drop in the default
 # order: cost, seven_day, five_hour, branch, directory, model, and context last.
 drop_order = []
+# The same number as the padding in Claude Code's statusLine settings, which takes that many
+# columns at each end of the line, so a row is fitted to the room that's left.
+padding = 0
 
 [colors]
 model = "cyan"
@@ -104,6 +107,7 @@ five_hour = [50, 80]
 seven_day = [50, 80]
 
 [format]
+# Or a list, one for each row, such as [" │ ", " · "]. Rows past its end take the last.
 separator = " │ "
 model = "{name}"
 directory = "{name}"
@@ -225,7 +229,9 @@ context `{eta}` in the config, nothing is written.
   segments drop in this order: cost, 7-day, 5-hour, branch, directory, model. Context goes last. The
   order holds wherever the config puts them, and each row is fitted on its own. `drop_order` names
   segments to drop first, in its order, ahead of the rest: `drop_order = ["branch"]` drops the branch
-  before the cost.
+  before the cost. A row gets the terminal width less 4 columns, which Claude Code keeps at its edges.
+  If you set `padding` in Claude Code's `statusLine` settings, set the same `padding` here: Claude
+  Code takes that many columns at each end, and the config can't read it from there.
 - **Color**: set `NO_COLOR` to any non-empty value to turn colors off, whatever the config says.
 - **Git**: the branch comes from the repository's `HEAD` file, so no `git` process runs. Linked
   worktrees and submodules work. Repositories that use the reftable ref format show no branch.

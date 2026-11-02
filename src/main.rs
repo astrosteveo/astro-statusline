@@ -68,7 +68,7 @@ fn status_line() {
         history: &history,
         branch: branch.as_deref(),
     };
-    let lines = segments::lines(&env, max_width(), color_enabled());
+    let lines = segments::lines(&env, columns(), color_enabled());
 
     // With every row empty this prints one empty line, which clears the status line. Claude Code
     // shows only stdout, and only after a zero exit, so a failed write has nowhere useful to go.
@@ -81,11 +81,11 @@ fn now() -> Option<i64> {
     i64::try_from(since_epoch.as_secs()).ok()
 }
 
-/// The widest the line may be. Claude Code sets `COLUMNS` to the terminal width, since the
+/// The terminal width. Claude Code sets `COLUMNS` to it, since the
 /// command's output is captured and can't query the terminal itself.
-fn max_width() -> Option<usize> {
+fn columns() -> Option<usize> {
     let columns: usize = env::var("COLUMNS").ok()?.trim().parse().ok()?;
-    (columns > 0).then(|| render::max_width(columns))
+    (columns > 0).then_some(columns)
 }
 
 /// Color is on unless `NO_COLOR` is set to a non-empty value (https://no-color.org).

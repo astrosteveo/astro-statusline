@@ -74,6 +74,11 @@ impl Settings {
         })
     }
 
+    /// The status line's `padding`, when the settings set a number for it.
+    pub fn padding(&self) -> Option<u64> {
+        self.json.get("statusLine")?.get("padding")?.as_u64()
+    }
+
     pub fn status(&self) -> Status {
         let Some(status_line) = self.json.get("statusLine") else {
             return Status::NotSet;
@@ -167,6 +172,23 @@ mod tests {
         let path = dir.path().join("settings.json");
         fs::write(&path, text).unwrap();
         Settings::read(&path).unwrap()
+    }
+
+    #[test]
+    fn reads_the_status_line_s_padding() {
+        assert_eq!(settings("{}").padding(), None);
+        assert_eq!(
+            settings(r#"{"statusLine": {"command": "x"}}"#).padding(),
+            None
+        );
+        assert_eq!(
+            settings(r#"{"statusLine": {"padding": 3}}"#).padding(),
+            Some(3)
+        );
+        assert_eq!(
+            settings(r#"{"statusLine": {"padding": "3"}}"#).padding(),
+            None
+        );
     }
 
     #[test]

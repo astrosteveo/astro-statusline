@@ -20,7 +20,9 @@ pub enum Field {
     Template(Kind),
     /// A style in `[colors]`, by its key.
     Style(&'static str),
-    Separator,
+    /// The separator of a row, counted from 0.
+    Separator(usize),
+    Padding,
     BarWidth,
     BarFull,
     BarEmpty,
@@ -40,12 +42,13 @@ enum Shape {
 }
 
 impl Field {
-    /// The table and key the field is written to.
+    /// The table and key the field is written to. An empty table is the top of the file.
     pub fn path(self) -> (&'static str, &'static str) {
         match self {
             Field::Template(kind) => ("format", kind.name()),
             Field::Style(key) => ("colors", key),
-            Field::Separator => ("format", "separator"),
+            Field::Separator(_) => ("format", "separator"),
+            Field::Padding => ("", "padding"),
             Field::BarWidth => ("bar", "width"),
             Field::BarFull => ("bar", "full"),
             Field::BarEmpty => ("bar", "empty"),
@@ -58,7 +61,7 @@ impl Field {
 
     fn shape(self) -> Shape {
         match self {
-            Field::BarWidth | Field::GraphWidth => Shape::Integer,
+            Field::BarWidth | Field::GraphWidth | Field::Padding => Shape::Integer,
             Field::Thresholds(_) => Shape::List,
             _ => Shape::Text,
         }
@@ -69,21 +72,21 @@ impl Field {
         match self {
             Field::Template(kind) => Template::parse(text, kind.placeholders()).map(drop),
             Field::Style(_) => text.parse::<Style>().map(drop),
-            Field::Separator => Ok(()),
+            Field::Separator(_) => Ok(()),
             Field::BarFull | Field::BarEmpty | Field::BarMarker => config::check_cell(text),
             Field::GraphChars => config::check_graph_chars(text).map(drop),
-            Field::BarWidth | Field::GraphWidth => {
-                let width: u64 = text
+            Field::BarWidth | Field::GraphWidth | Field::Padding => {
+                let number: u64 = text
                     .trim()
                     .parse()
                     .map_err(|_| format!("{text:?} isn't a whole number"))?;
-                let check = match self {
-                    Field::BarWidth => config::check_bar_width,
-                    _ => config::check_graph_width,
-                };
-                check(width)?;
-                // Checked to fit in a u8 above.
-                return Ok(Value::from(width as i64));
+                match self {
+                    Field::BarWidth => config::check_bar_width(number).map(drop),
+                    Field::GraphWidth => config::check_graph_width(number).map(drop),
+                    _ => config::check_padding(number).map(drop),
+                }?;
+                // Checked to be at most 100 above.
+                return Ok(Value::from(number as i64));
             }
             Field::Thresholds(_) => {
                 // Brackets are optional, so "60, 85" and "[60, 85]" both read.
@@ -134,6 +137,23 @@ impl Doc {
     /// The field's text in the file, or its default when the file leaves it out.
     pub fn get(&self, field: Field) -> Shown {
         let (table, key) = field.path();
+        if let (Field::Separator(row), Some(Item::Value(Value::Array(list)))) =
+            (field, lookup(&self.0, table, key))
+        {
+            let item = list.get(row).or_else(|| list.iter().last());
+            return match item.map(|value| value.as_str()) {
+                Some(Some(text)) => Shown {
+                    text: text.to_string(),
+                    set: true,
+                    error: None,
+                },
+                _ => Shown {
+                    text: String::new(),
+                    set: true,
+                    error: Some("format.separator must be text, or a list of text".to_string()),
+                },
+            };
+        }
         let Some(item) = lookup(&self.0, table, key) else {
             let default = lookup(&DEFAULT_DOC, table, key).expect("every field has a default");
             return Shown {
@@ -160,7 +180,13 @@ impl Doc {
 
     /// Sets the field, keeping any comment after the value it replaces.
     pub fn set(&mut self, field: Field, value: Value) {
-        let (table, key) = field.path();
+        match field {
+            Field::Separator(row) => self.set_separator(row, value),
+            field => self.set_at(field.path(), value),
+        }
+    }
+
+    fn set_at(&mut self, (table, key): (&str, &str), value: Value) {
         let inline = self.0.get(table).is_some_and(Item::is_inline_table);
         let table = table_mut(&mut self.0, table);
         match table.get_mut(key) {
@@ -180,10 +206,30 @@ impl Doc {
         }
     }
 
+    /// Sets one row's separator. When every row then has the same one, it's written as one text,
+    /// and otherwise as a list with one for each row.
+    fn set_separator(&mut self, row: usize, value: Value) {
+        let rows = self.rows().len().max(row + 1);
+        let mut each: Vec<String> = (0..rows)
+            .map(|row| self.get(Field::Separator(row)).text)
+            .collect();
+        each[row] = value.as_str().unwrap_or_default().to_string();
+        let value = if each.iter().all(|text| *text == each[0]) {
+            Value::from(each.swap_remove(0))
+        } else {
+            Value::Array(each.iter().collect())
+        };
+        self.set_at(Field::Separator(row).path(), value);
+    }
+
     /// Takes the field out of the file, so it reads as its default.
     pub fn reset(&mut self, field: Field) {
         let (table, key) = field.path();
-        if let Some(table) = self.0.get_mut(table).and_then(Item::as_table_like_mut) {
+        let table = match table {
+            "" => Some(self.0.as_table_mut() as &mut dyn TableLike),
+            table => self.0.get_mut(table).and_then(Item::as_table_like_mut),
+        };
+        if let Some(table) = table {
             table.remove(key);
         }
     }
@@ -299,7 +345,10 @@ impl Doc {
 }
 
 fn lookup<'d>(doc: &'d DocumentMut, table: &str, key: &str) -> Option<&'d Item> {
-    doc.get(table)?.as_table_like()?.get(key)
+    match table {
+        "" => doc.get(key),
+        table => doc.get(table)?.as_table_like()?.get(key),
+    }
 }
 
 /// A value as the editor shows it: a string's contents, or the TOML of anything else.
@@ -319,6 +368,9 @@ fn text_of(item: &Item) -> String {
 /// The table called `name`, made as a `[name]` table at the end of the file when there is none.
 fn table_mut<'d>(doc: &'d mut DocumentMut, name: &str) -> &'d mut dyn TableLike {
     let root = doc.as_table_mut();
+    if name.is_empty() {
+        return root;
+    }
     if !root.get(name).is_some_and(Item::is_table_like) {
         root.insert(name, Item::Table(Table::new()));
     }
@@ -366,7 +418,7 @@ mod tests {
             doc.get(Field::Template(Kind::FiveHour)).text,
             "5h {percent}"
         );
-        assert_eq!(doc.get(Field::Separator).text, " │ ");
+        assert_eq!(doc.get(Field::Separator(0)).text, " │ ");
     }
 
     #[test]
@@ -440,14 +492,14 @@ mod tests {
         assert!(Field::Style("model").value("red blue").is_err());
         assert!(Field::BarMarker.value("|").is_ok());
         assert!(Field::GraphChars.value("x").is_err());
-        assert!(Field::Separator.value("").is_ok());
+        assert!(Field::Separator(0).value("").is_ok());
     }
 
     #[test]
     fn edits_keep_comments_order_and_formatting() {
         let text = "# My status line.\n\n[format]\n# Shown between segments.\nseparator = \" · \"  # a dot\ncost = \"{usd}\"\n\n[colors]\nmodel = \"cyan\"\n";
         let mut doc = doc(text);
-        doc.set(Field::Separator, Value::from(" | "));
+        doc.set(Field::Separator(0), Value::from(" | "));
         doc.set(Field::Style("branch"), Value::from("bold"));
         doc.set(Field::BarWidth, Value::from(6));
         assert_eq!(
@@ -519,6 +571,49 @@ mod tests {
         assert_eq!(Doc::parse("").unwrap().rows(), [Kind::ALL]);
         let doc = doc("lines = [[\"model\", \"git\"], \"cost\"]");
         assert_eq!(doc.rows(), [vec![Kind::Model], vec![]]);
+    }
+
+    #[test]
+    fn writes_one_separator_or_one_per_row() {
+        let rows = "lines = [[\"model\"], [\"cost\"], [\"context\"]]\n";
+        let mut doc = doc(&format!("{rows}[format]\nseparator = \" | \"  # mine\n"));
+        let separator = |doc: &Doc, row| doc.get(Field::Separator(row)).text;
+        assert_eq!(separator(&doc, 2), " | ");
+
+        doc.set(Field::Separator(1), Value::from(" · "));
+        assert_eq!(
+            doc.text(),
+            format!("{rows}[format]\nseparator = [\" | \", \" · \", \" | \"]  # mine\n")
+        );
+        assert_eq!(
+            (separator(&doc, 0), separator(&doc, 1), separator(&doc, 7)),
+            (" | ".into(), " · ".into(), " | ".into())
+        );
+        assert_eq!(
+            config::parse(&doc.text()).unwrap().format.separator.row(1),
+            " · "
+        );
+
+        // Back to the same for every row, it's one text again.
+        doc.set(Field::Separator(1), Value::from(" | "));
+        assert_eq!(
+            doc.text(),
+            format!("{rows}[format]\nseparator = \" | \"  # mine\n")
+        );
+
+        let doc = Doc::parse("format.separator = [1]").unwrap();
+        assert!(doc.get(Field::Separator(0)).error.is_some());
+    }
+
+    #[test]
+    fn edits_the_padding_at_the_top_of_the_file() {
+        let mut doc = doc("[colors]\nmodel = \"cyan\"\n");
+        assert_eq!(doc.get(Field::Padding).text, "0");
+        doc.set(Field::Padding, Field::Padding.value("2").unwrap());
+        assert_eq!(doc.text(), "padding = 2\n[colors]\nmodel = \"cyan\"\n");
+        assert!(Field::Padding.value("101").is_err());
+        doc.reset(Field::Padding);
+        assert_eq!(doc.text(), "[colors]\nmodel = \"cyan\"\n");
     }
 
     #[test]

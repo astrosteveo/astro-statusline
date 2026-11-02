@@ -138,6 +138,27 @@ fn drops_segments_in_the_configured_order() {
 }
 
 #[test]
+fn draws_each_row_s_separator_and_keeps_the_padding_free() {
+    let input = br#"{"model": {"display_name": "Opus"}, "cwd": "/home/me/project",
+        "context_window": {"used_percentage": 63}, "cost": {"total_cost_usd": 1.5}}"#;
+    let draw = |config: &str, columns: &str| {
+        let env = [("NO_COLOR", "1"), ("COLUMNS", columns)];
+        run_with_config(Some(config), input, &env).stdout
+    };
+    let rows = "lines = [[\"model\", \"directory\"], [\"context\", \"cost\"], [\"cost\"]]\n";
+    let config = format!("{rows}format.separator = [\" | \", \" · \"]");
+    assert_eq!(
+        draw(&config, "80"),
+        "Opus | project\nctx 63% · $1.50\n$1.50\n"
+    );
+    // "ctx 63% · $1.50" is 15 columns: 19 leave room for it, but not with 2 columns of padding
+    // at each end.
+    let config = "segments = [\"context\", \"cost\"]\nformat.separator = \" · \"";
+    assert_eq!(draw(config, "19"), "ctx 63% · $1.50\n");
+    assert_eq!(draw(&format!("padding = 2\n{config}"), "19"), "ctx 63%\n");
+}
+
+#[test]
 fn honors_no_color_and_columns() {
     let input = br#"{"model": {"display_name": "Opus"}, "cwd": "/home/me/project"}"#;
     assert_eq!(run(input, &[("NO_COLOR", "1")]).stdout, "Opus │ project\n");

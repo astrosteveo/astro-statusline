@@ -102,7 +102,14 @@ const SECTIONS: [Section; 14] = [
 ];
 
 impl Section {
-    fn fields(self) -> Vec<Field> {
+    /// The line of the right-hand pane the section's first field is on. Claude Code's first line
+    /// sets up the status line.
+    fn first_field(self) -> usize {
+        usize::from(self == Section::ClaudeCode)
+    }
+
+    /// The fields the section edits, in a config with `rows` rows.
+    fn fields(self, rows: usize) -> Vec<Field> {
         match self {
             Section::Segment(kind) => {
                 let mut fields = vec![Field::Template(kind)];
@@ -112,7 +119,12 @@ impl Section {
                 }
                 fields
             }
-            Section::Separator => vec![Field::Separator, Field::Style("separator")],
+            Section::Separator => {
+                let mut fields: Vec<Field> = (0..rows.max(1)).map(Field::Separator).collect();
+                fields.push(Field::Style("separator"));
+                fields
+            }
+            Section::ClaudeCode => vec![Field::Padding],
             Section::UsageColors => vec![
                 Field::Style("usage_low"),
                 Field::Style("usage_medium"),
@@ -125,7 +137,7 @@ impl Section {
                 Field::BarMarker,
             ],
             Section::Graph => vec![Field::GraphWidth, Field::GraphChars],
-            Section::Layout | Section::DropOrder | Section::ClaudeCode => Vec::new(),
+            Section::Layout | Section::DropOrder => Vec::new(),
         }
     }
 }
@@ -356,6 +368,8 @@ struct App {
     message: Option<(String, bool)>,
     claude_path: Option<PathBuf>,
     claude_status: claude::Status,
+    /// The `padding` of Claude Code's status line, when its settings set one.
+    claude_padding: Option<u64>,
     exe: PathBuf,
     print_on_exit: bool,
     quit_after_save: bool,
@@ -402,6 +416,7 @@ impl App {
             message: None,
             claude_path,
             claude_status: claude::Status::NotSet,
+            claude_padding: None,
             exe,
             print_on_exit: false,
             quit_after_save: false,
@@ -472,11 +487,14 @@ impl App {
     }
 
     fn refresh_claude(&mut self) {
-        self.claude_status = match &self.claude_path {
-            None => claude::Status::Unreadable("can't find the home directory".to_string()),
+        (self.claude_status, self.claude_padding) = match &self.claude_path {
+            None => (
+                claude::Status::Unreadable("can't find the home directory".to_string()),
+                None,
+            ),
             Some(path) => match claude::Settings::read(path) {
-                Ok(settings) => settings.status(),
-                Err(error) => claude::Status::Unreadable(error),
+                Ok(settings) => (settings.status(), settings.padding()),
+                Err(error) => (claude::Status::Unreadable(error), None),
             },
         };
     }
@@ -552,20 +570,20 @@ impl App {
         match self.section() {
             Section::Layout => self.layout_key(key),
             Section::DropOrder => self.drop_order_key(key),
-            Section::ClaudeCode => {
-                if key.code == KeyCode::Enter {
-                    self.offer_claude_setup();
-                }
-            }
             section => {
-                let fields = section.fields();
+                let fields = section.fields(self.doc.rows().len());
+                let first = section.first_field();
+                let last = first + fields.len() - 1;
+                // Rows taken away can leave the cursor past the last field.
+                self.cursor = self.cursor.min(last);
                 match key.code {
                     KeyCode::Up | KeyCode::Char('k') => self.cursor = self.cursor.saturating_sub(1),
-                    KeyCode::Down | KeyCode::Char('j') => {
-                        self.cursor = (self.cursor + 1).min(fields.len() - 1);
+                    KeyCode::Down | KeyCode::Char('j') => self.cursor = (self.cursor + 1).min(last),
+                    KeyCode::Enter if self.cursor < first => self.offer_claude_setup(),
+                    KeyCode::Enter => self.open_field(fields[self.cursor - first]),
+                    KeyCode::Char('r') if self.cursor >= first => {
+                        self.doc.reset(fields[self.cursor - first]);
                     }
-                    KeyCode::Enter => self.open_field(fields[self.cursor]),
-                    KeyCode::Char('r') => self.doc.reset(fields[self.cursor]),
                     _ => {}
                 }
             }

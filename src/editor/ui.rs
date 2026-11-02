@@ -221,12 +221,13 @@ fn draw_detail(frame: &mut Frame, app: &App, area: Rect) {
     match section {
         Section::Layout => draw_layout(frame, app, inner, focused),
         Section::DropOrder => draw_drop_order(frame, app, inner, focused),
-        Section::ClaudeCode => draw_claude(frame, app, inner),
+        Section::ClaudeCode => draw_claude(frame, app, inner, focused),
         section => draw_fields(frame, app, inner, section, focused),
     }
 }
 
-fn field_label(section: Section, field: Field) -> &'static str {
+/// The field's label, in a config with `rows` rows.
+fn field_label(field: Field, rows: usize) -> String {
     match field {
         Field::Template(_) => "Template",
         Field::Style("usage_low") => "Low",
@@ -234,21 +235,23 @@ fn field_label(section: Section, field: Field) -> &'static str {
         Field::Style("usage_high") => "High",
         Field::Thresholds(_) => "Medium, high",
         Field::Style(_) => "Style",
-        Field::Separator => "Text",
+        Field::Separator(_) if rows <= 1 => "Text",
+        Field::Separator(row) => return format!("Row {}", row + 1),
+        Field::Padding => "Padding",
         Field::BarWidth | Field::GraphWidth => "Width",
         Field::BarFull => "Full cell",
         Field::BarEmpty => "Empty cell",
-        Field::BarMarker if section == Section::Bar => "Pace marker",
-        Field::BarMarker => "Marker",
+        Field::BarMarker => "Pace marker",
         Field::GraphChars => "Cells",
     }
+    .to_string()
 }
 
 /// A field's value as shown: text in quotes, so spaces at its ends show, and a style with a
 /// sample of itself.
 fn value_spans(field: Field, text: &str) -> Vec<Span<'static>> {
     match field {
-        Field::BarWidth | Field::GraphWidth | Field::Thresholds(_) => {
+        Field::BarWidth | Field::GraphWidth | Field::Padding | Field::Thresholds(_) => {
             vec![Span::raw(text.to_string())]
         }
         Field::Style(_) => {
@@ -269,13 +272,15 @@ fn value_spans(field: Field, text: &str) -> Vec<Span<'static>> {
 }
 
 fn draw_fields(frame: &mut Frame, app: &App, area: Rect, section: Section, focused: bool) {
-    let fields = section.fields();
+    let rows = app.doc.rows().len();
+    let fields = section.fields(rows);
     let mut lines: Vec<Line> = Vec::new();
     let mut cursor = None;
     let mut popup_row = None;
     for (i, &field) in fields.iter().enumerate() {
-        let label = format!(" {:<LABEL_WIDTH$}", field_label(section, field));
-        let selected = focused && i == app.cursor && matches!(app.mode, Mode::Normal);
+        let label = format!(" {:<LABEL_WIDTH$}", field_label(field, rows));
+        let selected =
+            focused && i + section.first_field() == app.cursor && matches!(app.mode, Mode::Normal);
         let label = Span::styled(label, if selected { highlight(true) } else { bold() });
         match &app.mode {
             Mode::Edit(edit) if edit.field == field => {
@@ -337,6 +342,30 @@ fn draw_fields(frame: &mut Frame, app: &App, area: Rect, section: Section, focus
              and brackets. The README says what each placeholder shows.",
             dim(),
         ));
+    }
+    if section == Section::Separator && rows > 1 {
+        lines.push(Line::styled(
+            " Each row can have its own. The same for every row is written as one.",
+            dim(),
+        ));
+    }
+    if section == Section::ClaudeCode {
+        lines.push(Line::styled(
+            " Padding: the same number as the padding in Claude Code's statusLine settings, which \
+             takes that many columns at each end of the line.",
+            dim(),
+        ));
+        let ours: u64 = app.doc.get(Field::Padding).text.parse().unwrap_or(0);
+        let theirs = app.claude_padding.unwrap_or(0);
+        if ours != theirs {
+            lines.push(Line::styled(
+                format!(
+                    " Claude Code's padding is {theirs}, so rows are fitted to the wrong width: \
+                     set Padding to {theirs}."
+                ),
+                Style::default().fg(Color::Yellow),
+            ));
+        }
     }
     if section == Section::UsageColors {
         lines.push(Line::styled(
@@ -461,7 +490,7 @@ fn draw_layout(frame: &mut Frame, app: &App, area: Rect, focused: bool) {
     frame.render_widget(Paragraph::new(lines).scroll((offset as u16, 0)), area);
 }
 
-fn draw_claude(frame: &mut Frame, app: &App, area: Rect) {
+fn draw_claude(frame: &mut Frame, app: &App, area: Rect, focused: bool) {
     let path = app
         .claude_path
         .as_deref()
@@ -484,31 +513,50 @@ fn draw_claude(frame: &mut Frame, app: &App, area: Rect) {
             Span::raw(format!("Can't read the settings: {error}")),
         ]),
     };
-    let lines = vec![
+    let selected = focused && app.cursor == 0 && matches!(app.mode, Mode::Normal);
+    let label = Span::styled(
+        format!(" {:<LABEL_WIDTH$}", "Status line"),
+        if selected { highlight(true) } else { bold() },
+    );
+    let header = vec![
         Line::from(vec![
             Span::styled(format!(" {:<LABEL_WIDTH$} ", "Settings"), bold()),
             Span::raw(path),
         ]),
         Line::from(
-            [Span::styled(
-                format!(" {:<LABEL_WIDTH$} ", "Status line"),
-                bold(),
-            )]
-            .into_iter()
-            .chain(status.spans)
-            .collect::<Vec<_>>(),
+            [label, Span::raw(" ")]
+                .into_iter()
+                .chain(status.spans)
+                .collect::<Vec<_>>(),
         ),
-        Line::raw(""),
         Line::styled(
             format!(
-                " Enter sets the status line to run {}, every second so it fits the terminal \
+                " {:LABEL_WIDTH$} Enter sets it to run {}, every second so it fits the terminal \
                  again soon after a resize. It shows what changes before writing.",
+                "",
                 app.exe.display()
             ),
             dim(),
         ),
     ];
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
+    let height = header
+        .iter()
+        .map(|line| line_count(line, area.width))
+        .sum::<usize>() as u16;
+    let [top, rest] =
+        Layout::vertical([Constraint::Length(height), Constraint::Fill(1)]).areas(area);
+    frame.render_widget(Paragraph::new(header).wrap(Wrap { trim: false }), top);
+    draw_fields(frame, app, rest, Section::ClaudeCode, focused);
+}
+
+/// How many rows `line` takes when wrapped to `width` columns.
+fn line_count(line: &Line, width: u16) -> usize {
+    let text: String = line
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect();
+    wrapped_lines(&text, usize::from(width))
 }
 
 fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
@@ -531,7 +579,9 @@ fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
         (Mode::Normal, Focus::Detail, Section::DropOrder) => {
             "↑↓ choose  J K move  r reset to default  ← back  s save  q quit"
         }
-        (Mode::Normal, Focus::Detail, Section::ClaudeCode) => "enter set up  ← back  q quit",
+        (Mode::Normal, Focus::Detail, Section::ClaudeCode) => {
+            "↑↓ choose  enter set up or edit  r reset  ← back  s save  q quit"
+        }
         (Mode::Normal, Focus::Detail, _) => {
             "↑↓ choose  enter edit  r reset to default  ← back  s save  q quit"
         }

@@ -282,6 +282,73 @@ fn scrolls_the_settings_list_to_the_chosen_section() {
 }
 
 #[test]
+fn edits_each_row_s_separator() {
+    let mut f = Fixture::new(Some(
+        "lines = [[\"model\", \"directory\"], [\"context\", \"cost\"]]\n",
+    ));
+    f.open(Section::Separator);
+    let screen = f.screen(100, 30);
+    assert!(
+        screen.contains("Row 1         \" │ \"  default"),
+        "{screen}"
+    );
+    assert!(
+        screen.contains("Row 2         \" │ \"  default"),
+        "{screen}"
+    );
+    f.press(&[
+        KeyCode::Down,
+        KeyCode::Enter,
+        KeyCode::Left,
+        KeyCode::Backspace,
+    ])
+    .typing("·")
+    .press(&[KeyCode::Enter]);
+    assert!(
+        f.app
+            .doc
+            .text()
+            .ends_with("[format]\nseparator = [\" │ \", \" · \"]\n")
+    );
+    let screen = f.screen(100, 30);
+    assert!(screen.contains("Opus 5.5 │ my-project"), "{screen}");
+    assert!(screen.contains("ctx 42% · $1.23"), "{screen}");
+    // A single row has a single field.
+    let mut f = Fixture::new(None);
+    f.open(Section::Separator);
+    assert!(f.screen(100, 30).contains("Text          \" │ \"  default"));
+}
+
+#[test]
+fn sets_the_padding_to_match_claude_code() {
+    let mut f = Fixture::new(None);
+    let settings = f.dir.path().join("claude/settings.json");
+    fs::create_dir_all(settings.parent().unwrap()).unwrap();
+    fs::write(
+        &settings,
+        r#"{"statusLine": {"command": "x", "padding": 2}}"#,
+    )
+    .unwrap();
+    f.app.refresh_claude();
+    f.open(Section::ClaudeCode);
+    assert!(f.screen(100, 30).contains("Claude Code's padding is 2"));
+    f.press(&[KeyCode::Down, KeyCode::Enter, KeyCode::Backspace])
+        .typing("2")
+        .press(&[KeyCode::Enter]);
+    assert_eq!(f.app.doc.text(), "padding = 2\n");
+    assert!(!f.screen(100, 30).contains("Claude Code's padding is"));
+    // 2 columns of padding at each end take 4 more from the preview's 40.
+    f.app.columns = Some(40);
+    assert_eq!(f.app.preview_config().unwrap().padding, 2);
+    let screen = f.screen(100, 30);
+    assert!(
+        screen.contains("Opus 5.5 │ my-project │ ctx 42%"),
+        "{screen}"
+    );
+    assert!(!screen.contains("main"), "{screen}");
+}
+
+#[test]
 fn reorders_what_drops_first() {
     let mut f = Fixture::new(Some("segments = [\"model\", \"directory\", \"cost\"]\n"));
     f.open(Section::DropOrder);
@@ -335,7 +402,7 @@ fn sets_a_segment_s_thresholds() {
     assert!(f.screen(110, 30).contains("Medium, high  [50, 80]"));
     assert!(
         !Section::Segment(Kind::Cost)
-            .fields()
+            .fields(1)
             .contains(&Field::Thresholds(Kind::Cost))
     );
 }

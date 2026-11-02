@@ -5,7 +5,6 @@ use ratatui::text::{Line, Span};
 
 use crate::config::Config;
 use crate::history::Sample;
-use crate::render;
 use crate::segments::{self, Env};
 use crate::session::Session;
 
@@ -104,7 +103,7 @@ pub fn lines(config: &Config, scenario: &Scenario, columns: usize) -> Vec<String
         history: &history,
         branch: scenario.branch,
     };
-    segments::lines(&env, Some(render::max_width(columns)), true)
+    segments::lines(&env, Some(columns), true)
 }
 
 /// A made-up history for graphs and predictions: half an hour of steady growth up to the

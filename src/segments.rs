@@ -106,18 +106,20 @@ pub struct Env<'a> {
     pub branch: Option<&'a str>,
 }
 
-/// Each row of the status line, top to bottom, no wider than `max_width` when it is given.
-/// A row with nothing to show is left out, so rows appear as their data arrives.
-pub fn lines(env: &Env, max_width: Option<usize>, color: bool) -> Vec<String> {
-    let (format, colors) = (&env.config.format, &env.config.colors);
-    env.config
+/// Each row of the status line, top to bottom, fitted to a terminal `columns` wide when that's
+/// known. A row with nothing to show is left out, so rows appear as their data arrives.
+pub fn lines(env: &Env, columns: Option<usize>, color: bool) -> Vec<String> {
+    let config = env.config;
+    let max_width = columns.map(|columns| render::max_width(columns, config.padding));
+    config
         .rows()
         .into_iter()
-        .map(|kinds| {
+        .enumerate()
+        .map(|(index, kinds)| {
             render::render(
                 row(env, kinds),
-                &format.separator,
-                &colors.separator,
+                config.format.separator.row(index),
+                &config.colors.separator,
                 max_width,
                 color,
             )

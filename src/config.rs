@@ -26,6 +26,9 @@ segments = ["model", "directory", "branch", "context", "five_hour", "seven_day",
 # Segments that drop first when a row is too wide, in this order. The rest drop in the default
 # order: cost, seven_day, five_hour, branch, directory, model, and context last.
 drop_order = []
+# The same number as the padding in Claude Code's statusLine settings, which takes that many
+# columns at each end of the line, so a row is fitted to the room that's left.
+padding = 0
 
 [colors]
 model = "cyan"
@@ -45,6 +48,7 @@ five_hour = [50, 80]
 seven_day = [50, 80]
 
 [format]
+# Or a list, one for each row, such as [" │ ", " · "]. Rows past its end take the last.
 separator = " │ "
 model = "{name}"
 directory = "{name}"
@@ -74,6 +78,10 @@ pub struct Config {
     pub lines: Option<Vec<Vec<Kind>>>,
     /// Segments that drop first on a narrow terminal, in this order, ahead of the rest.
     pub drop_order: Vec<Kind>,
+    /// The `padding` in Claude Code's status line settings, which takes that many columns at each
+    /// end of the line. The command can't see it, so the config repeats it.
+    #[serde(deserialize_with = "padding")]
+    pub padding: u16,
     pub colors: Colors,
     pub thresholds: Thresholds,
     pub format: Format,
@@ -160,7 +168,7 @@ pub fn check_thresholds(pair: &[i64]) -> Result<[u8; 2], String> {
 #[serde(default, deny_unknown_fields)]
 pub struct Format {
     /// Drawn between segments, in `colors.separator`.
-    pub separator: String,
+    pub separator: Separators,
     #[serde(deserialize_with = "model_template")]
     pub model: Template,
     #[serde(deserialize_with = "directory_template")]
@@ -175,6 +183,66 @@ pub struct Format {
     pub seven_day: Template,
     #[serde(deserialize_with = "cost_template")]
     pub cost: Template,
+}
+
+/// The separator of each row, written as one text for every row or a list with one per row.
+/// Rows past the end of the list take its last.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Separators(Vec<String>);
+
+impl<'de> Deserialize<'de> for Separators {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Visitor;
+
+        impl<'de> de::Visitor<'de> for Visitor {
+            type Value = Separators;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("text, or a list of text with one for each row")
+            }
+
+            fn visit_str<E: de::Error>(self, text: &str) -> Result<Separators, E> {
+                Ok(Separators(vec![text.to_string()]))
+            }
+
+            fn visit_seq<A: de::SeqAccess<'de>>(self, mut seq: A) -> Result<Separators, A::Error> {
+                let mut list = Vec::new();
+                while let Some(text) = seq.next_element::<String>()? {
+                    list.push(text);
+                }
+                if list.is_empty() {
+                    return Err(de::Error::custom(
+                        "format.separator is an empty list; give at least one",
+                    ));
+                }
+                Ok(Separators(list))
+            }
+        }
+
+        deserializer.deserialize_any(Visitor)
+    }
+}
+
+impl Separators {
+    /// The separator of row `index`, counted from 0.
+    pub fn row(&self, index: usize) -> &str {
+        self.0
+            .get(index)
+            .or(self.0.last())
+            .expect("there is at least one")
+    }
+}
+
+fn padding<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u16, D::Error> {
+    check_padding(u64::deserialize(deserializer)?).map_err(de::Error::custom)
+}
+
+/// Checks `padding`.
+pub fn check_padding(padding: u64) -> Result<u16, String> {
+    u16::try_from(padding)
+        .ok()
+        .filter(|padding| *padding <= 100)
+        .ok_or_else(|| format!("padding {padding} isn't from 0 to 100"))
 }
 
 /// How `{bar}` is drawn.
@@ -357,7 +425,7 @@ impl Default for Format {
             Template::parse(text, kind.placeholders()).expect("default templates parse")
         };
         Format {
-            separator: " │ ".to_string(),
+            separator: Separators(vec![" │ ".to_string()]),
             model: template(Kind::Model, "{name}"),
             directory: template(Kind::Directory, "{name}"),
             branch: template(Kind::Branch, "{branch}"),
@@ -538,9 +606,33 @@ mod tests {
         assert_eq!(config.colors.branch, style("magenta"));
         assert_eq!(parse("segments = []").unwrap().rows(), [&[]]);
         assert_eq!(
-            parse("format.separator = \"\"").unwrap().format.separator,
+            parse("format.separator = \"\"")
+                .unwrap()
+                .format
+                .separator
+                .row(0),
             ""
         );
+    }
+
+    #[test]
+    fn reads_one_separator_or_one_per_row() {
+        let separators = |text: &str| parse(text).unwrap().format.separator;
+        let one = separators("format.separator = \" | \"");
+        assert_eq!((one.row(0), one.row(5)), (" | ", " | "));
+        let each = separators("format.separator = [\" | \", \" · \"]");
+        assert_eq!(
+            (each.row(0), each.row(1), each.row(2)),
+            (" | ", " · ", " · ")
+        );
+        assert_eq!(Config::default().format.separator.row(3), " │ ");
+    }
+
+    #[test]
+    fn reads_the_padding() {
+        assert_eq!(Config::default().padding, 0);
+        assert_eq!(parse("padding = 3").unwrap().padding, 3);
+        assert_eq!(check_padding(100), Ok(100));
     }
 
     #[test]
@@ -603,6 +695,18 @@ mod tests {
             ("graph.chars = \"#\"", "must be 2 or more characters"),
             ("graph.chars = \"a\\nb\"", "must be 2 or more characters"),
             ("graph.chars = \"日本\"", "must be 2 or more characters"),
+            ("format.separator = []", "format.separator is an empty list"),
+            (
+                "format.separator = 1",
+                "expected text, or a list of text with one for each row",
+            ),
+            (
+                "format.separator = [1]",
+                "invalid type: integer `1`, expected a string",
+            ),
+            ("padding = 101", "padding 101 isn't from 0 to 100"),
+            ("padding = -1", "invalid value"),
+            ("padding = \"2\"", "invalid type"),
             (
                 "drop_order = [\"cost\", \"cost\"]",
                 "drop_order names cost twice",
