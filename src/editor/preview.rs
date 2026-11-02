@@ -169,6 +169,16 @@ fn apply_sgr(mut style: TuiStyle, params: &str) -> TuiStyle {
                 style = style.fg(Color::Rgb(r, g, b));
                 i += 4;
             }
+            [code @ 40..=47, ..] => style = style.bg(Color::Indexed(code - 40)),
+            [code @ 100..=107, ..] => style = style.bg(Color::Indexed(code - 100 + 8)),
+            [48, 5, index, ..] => {
+                style = style.bg(Color::Indexed(index));
+                i += 2;
+            }
+            [48, 2, r, g, b, ..] => {
+                style = style.bg(Color::Rgb(r, g, b));
+                i += 4;
+            }
             _ => {}
         }
         i += 1;
@@ -242,6 +252,26 @@ mod tests {
         // 31 columns of text, and Claude Code keeps 4 for its edges.
         assert_eq!(line(35), "Opus 5.5 │ my-project │ ctx 42%");
         assert_eq!(line(34), "Opus 5.5 │ ctx 42%");
+    }
+
+    #[test]
+    fn turns_background_escapes_into_backgrounds() {
+        let style = |escape: &str| to_line(&format!("\x1b[{escape}mx")).spans[0].style;
+        assert_eq!(
+            style("30;46"),
+            TuiStyle::default()
+                .fg(Color::Indexed(0))
+                .bg(Color::Indexed(6))
+        );
+        assert_eq!(style("101"), TuiStyle::default().bg(Color::Indexed(9)));
+        assert_eq!(
+            style("48;5;238"),
+            TuiStyle::default().bg(Color::Indexed(238))
+        );
+        assert_eq!(
+            style("48;2;0;95;135"),
+            TuiStyle::default().bg(Color::Rgb(0, 95, 135))
+        );
     }
 
     #[test]

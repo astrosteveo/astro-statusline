@@ -598,17 +598,25 @@ fn line_count(line: &Line, width: u16) -> usize {
 }
 
 fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
+    let picker_hints;
     let hints = match (&app.mode, app.focus, app.section()) {
         (Mode::Edit(edit), ..) => match (edit.placeholders, edit.field) {
             (Some(_), _) => "↑↓ choose  enter insert  esc close",
             (None, Field::Template(_)) => "enter keep  esc cancel  tab insert a placeholder",
             (None, _) => "enter keep  esc cancel",
         },
-        (Mode::Style(picker), ..) if picker.allows_usage() => {
-            "←↑↓→ color  b d i u attributes  U usage  x no color  t type it  enter keep  esc cancel"
-        }
-        (Mode::Style(_), ..) => {
-            "←↑↓→ color  b d i u attributes  x no color  t type it  enter keep  esc cancel"
+        (Mode::Style(picker), ..) => {
+            picker_hints = [
+                Some("←↑↓→ pick  o color/background  b d i u attributes"),
+                picker.allows_usage().then_some("U usage"),
+                picker.allows_powerline().then_some("p powerline"),
+                Some("x none  t type  enter keep  esc cancel"),
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join("  ");
+            picker_hints.as_str()
         }
         (Mode::Confirm(_), ..) => "",
         (Mode::Normal, Focus::Sections, _) => {
@@ -677,7 +685,23 @@ fn draw_picker(frame: &mut Frame, app: &App, area: Rect, picker: &Picker) {
             ]
         })
         .collect();
-    lines.push(Line::from(attributes));
+    lines.push(
+        Line::from(attributes)
+            .spans
+            .into_iter()
+            .chain([
+                Span::raw("   o picks "),
+                Span::styled(
+                    if picker.picking_background {
+                        "background"
+                    } else {
+                        "color"
+                    },
+                    highlight(true),
+                ),
+            ])
+            .collect::<Line>(),
+    );
     for row in 0..256 / u16::from(GRID_COLUMNS) {
         let mut spans = vec![Span::raw("  ")];
         for column in 0..u16::from(GRID_COLUMNS) {

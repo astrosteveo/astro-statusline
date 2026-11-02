@@ -99,6 +99,7 @@ impl Field {
                 });
             }
             Field::Template(kind) => kind.parse_template(text).map(drop),
+            Field::Style("separator") => config::parse_separator_style(text).map(drop),
             Field::Style(key) => text.parse::<Style>().and_then(|style| {
                 match Kind::from_name(key).is_some_and(Kind::has_usage) {
                     true => Ok(()),

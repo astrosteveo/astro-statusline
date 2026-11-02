@@ -17,7 +17,7 @@ use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, Ke
 
 use crate::config::{self, Config, Thresholds};
 use crate::segments::{Item, Kind};
-use crate::style::{COLORS, Color, Ink, Style};
+use crate::style::{Color, Ink, Style};
 use doc::{Doc, Field};
 use preview::SCENARIOS;
 
@@ -256,46 +256,38 @@ impl Input {
     }
 }
 
-/// A style being picked: its attributes and at most one color.
+/// A style being picked: its attributes, a color, and a background, or for the separator,
+/// powerline.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Picker {
     field: Field,
     /// Bold, dim, italic and underline, in that order.
     attributes: [bool; 4],
-    color: Option<PickedColor>,
+    color: Option<Ink>,
+    background: Option<Ink>,
+    /// Whether the grid picks the background rather than the color.
+    picking_background: bool,
+    powerline: bool,
     /// The highlighted cell of the 256-color grid.
     cursor: u8,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum PickedColor {
-    Index(u8),
-    /// A color the grid doesn't hold, such as `#ff8700`, as written.
-    Other(String),
-    Usage,
 }
 
 impl Picker {
     /// The picker on the style `text`, or on plain text when the file's style has a mistake.
     fn new(field: Field, text: &str) -> Self {
         let style: Style = text.parse().unwrap_or_default();
-        let color = style.ink().map(|ink| match ink {
-            Ink::Usage => PickedColor::Usage,
-            Ink::Color(Color::Basic(index) | Color::Indexed(index)) => PickedColor::Index(index),
-            Ink::Color(Color::Rgb(r, g, b)) => {
-                PickedColor::Other(format!("#{r:02x}{g:02x}{b:02x}"))
-            }
-        });
-        let cursor = match color {
-            Some(PickedColor::Index(index)) => index,
-            _ => 0,
-        };
-        Picker {
+        let mut picker = Picker {
             field,
             attributes: style.attribute_flags(),
-            color,
-            cursor,
-        }
+            color: style.ink(),
+            background: style.background(),
+            picking_background: false,
+            powerline: field == Field::Style("separator")
+                && text.trim().eq_ignore_ascii_case("powerline"),
+            cursor: 0,
+        };
+        picker.cursor = picker.cell().unwrap_or(0);
+        picker
     }
 
     /// Whether the field's style can take the usage color.
@@ -303,27 +295,62 @@ impl Picker {
         matches!(self.field, Field::Style(key) if Kind::from_name(key).is_some_and(Kind::has_usage))
     }
 
+    /// Whether the field is the separator's style, which can be powerline.
+    fn allows_powerline(&self) -> bool {
+        self.field == Field::Style("separator")
+    }
+
+    /// The color or background the grid picks.
+    fn target(&mut self) -> &mut Option<Ink> {
+        match self.picking_background {
+            true => &mut self.background,
+            false => &mut self.color,
+        }
+    }
+
+    /// The grid cell of the color or background being picked, if it's in the grid.
+    fn cell(&mut self) -> Option<u8> {
+        match *self.target() {
+            Some(Ink::Color(Color::Basic(index) | Color::Indexed(index))) => Some(index),
+            _ => None,
+        }
+    }
+
     /// The style as the config file spells it.
     fn text(&self) -> String {
+        if self.powerline {
+            return "powerline".to_string();
+        }
+        let name = |ink: Ink| match ink {
+            Ink::Usage => "usage".to_string(),
+            Ink::Color(color) => color.name(),
+        };
         let mut words: Vec<String> = crate::style::ATTRIBUTES
             .iter()
             .zip(self.attributes)
             .filter(|(_, on)| *on)
             .map(|((name, _), _)| name.to_string())
             .collect();
-        words.extend(self.color.as_ref().map(|color| match color {
-            PickedColor::Index(index @ 0..8) => COLORS[*index as usize].to_string(),
-            PickedColor::Index(index @ 8..16) => format!("bright_{}", COLORS[*index as usize - 8]),
-            PickedColor::Index(index) => index.to_string(),
-            PickedColor::Other(text) => text.clone(),
-            PickedColor::Usage => "usage".to_string(),
-        }));
+        words.extend(self.color.map(name));
+        words.extend(self.background.map(|ink| format!("on {}", name(ink))));
         words.join(" ")
     }
 
     fn move_cursor(&mut self, step: i16) {
         self.cursor = (i16::from(self.cursor) + step).clamp(0, 255) as u8;
-        self.color = Some(PickedColor::Index(self.cursor));
+        // The first 16 cells are the theme's colors, written by name.
+        let color = match self.cursor {
+            index @ 0..16 => Color::Basic(index),
+            index => Color::Indexed(index),
+        };
+        *self.target() = Some(Ink::Color(color));
+    }
+
+    fn switch_target(&mut self) {
+        self.picking_background = !self.picking_background;
+        if let Some(cell) = self.cell() {
+            self.cursor = cell;
+        }
     }
 }
 
@@ -633,8 +660,10 @@ impl App {
                 let i = "bdiu".find(c).expect("one of the four");
                 picker.attributes[i] = !picker.attributes[i];
             }
-            KeyCode::Char('x') => picker.color = None,
-            KeyCode::Char('U') if picker.allows_usage() => picker.color = Some(PickedColor::Usage),
+            KeyCode::Char('x') => *picker.target() = None,
+            KeyCode::Char('U') if picker.allows_usage() => *picker.target() = Some(Ink::Usage),
+            KeyCode::Char('o') => picker.switch_target(),
+            KeyCode::Char('p') if picker.allows_powerline() => picker.powerline = !picker.powerline,
             KeyCode::Char('t') => {
                 self.mode = Mode::Edit(Edit {
                     field: picker.field,

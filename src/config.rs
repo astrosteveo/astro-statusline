@@ -12,6 +12,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::dirs;
 use crate::history;
+use crate::render::SeparatorStyle;
 use crate::segments::{Item, Kind};
 use crate::style::Style;
 use crate::template::Template;
@@ -211,8 +212,8 @@ pub struct Colors {
     pub seven_day: Style,
     #[serde(deserialize_with = "plain_style")]
     pub cost: Style,
-    #[serde(deserialize_with = "plain_style")]
-    pub separator: Style,
+    #[serde(deserialize_with = "separator_style")]
+    pub separator: SeparatorStyle,
     /// Context and rate-limit percentages below their medium threshold.
     #[serde(deserialize_with = "plain_style")]
     pub usage_low: Style,
@@ -243,6 +244,20 @@ fn plain_style<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Style, D::E
     let style = Style::deserialize(deserializer)?;
     check_plain_style(&style).map_err(de::Error::custom)?;
     Ok(style)
+}
+
+fn separator_style<'de, D: Deserializer<'de>>(deserializer: D) -> Result<SeparatorStyle, D::Error> {
+    parse_separator_style(&String::deserialize(deserializer)?).map_err(de::Error::custom)
+}
+
+/// Reads `colors.separator`: a style, or `powerline`.
+pub fn parse_separator_style(text: &str) -> Result<SeparatorStyle, String> {
+    if text.trim().eq_ignore_ascii_case("powerline") {
+        return Ok(SeparatorStyle::Powerline);
+    }
+    let style: Style = text.parse()?;
+    check_plain_style(&style)?;
+    Ok(SeparatorStyle::Styled(style))
 }
 
 /// Checks a style drawn without a percentage, which has no usage color to take.
@@ -636,7 +651,7 @@ impl Default for Colors {
             five_hour: style("usage"),
             seven_day: style("usage"),
             cost: style("dim"),
-            separator: style("dim"),
+            separator: SeparatorStyle::Styled(style("dim")),
             usage_low: style("green"),
             usage_medium: style("yellow"),
             usage_high: style("red"),
@@ -807,6 +822,23 @@ mod tests {
     }
 
     #[test]
+    fn reads_powerline_separators() {
+        let separator = |text: &str| parse(text).unwrap().colors.separator;
+        assert_eq!(
+            separator("colors.separator = \"powerline\""),
+            SeparatorStyle::Powerline
+        );
+        assert_eq!(
+            separator("colors.separator = \" PowerLine \""),
+            SeparatorStyle::Powerline
+        );
+        assert_eq!(
+            separator("colors.separator = \"dim on blue\""),
+            SeparatorStyle::Styled(style("dim on blue"))
+        );
+    }
+
+    #[test]
     fn reads_the_padding() {
         assert_eq!(Config::default().padding, 0);
         assert_eq!(parse("padding = 3").unwrap().padding, 3);
@@ -901,6 +933,26 @@ mod tests {
             ),
             ("drop_order = [\"git\"]", "unknown variant `git`"),
             ("drop_order = \"cost\"", "invalid type"),
+            (
+                "colors.model = \"black on\"",
+                "has `on` with no color after it",
+            ),
+            (
+                "colors.model = \"on usage\"",
+                "usage is only for the context",
+            ),
+            (
+                "colors.separator = \"on usage\"",
+                "usage is only for the context",
+            ),
+            (
+                "colors.model = \"powerline\"",
+                "unknown style \"powerline\"",
+            ),
+            (
+                "colors.separator = \"powerline dim\"",
+                "unknown style \"powerline\"",
+            ),
             (
                 "colors.model = \"usage\"",
                 "usage is only for the context, five_hour",

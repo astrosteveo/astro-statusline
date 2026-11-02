@@ -7,6 +7,7 @@ use ratatui::backend::TestBackend;
 use tempfile::TempDir;
 
 use super::*;
+use crate::render::SeparatorStyle;
 
 const EXE: &str = "/usr/bin/astro-statusline";
 
@@ -216,6 +217,51 @@ fn reads_styles_into_the_picker_and_back() {
         assert_eq!(Picker::new(Field::Style("context"), text).text(), expected);
     }
     assert_eq!(Picker::new(Field::Style("model"), "bright_red").cursor, 9);
+}
+
+#[test]
+fn picks_a_background_and_powerline() {
+    let mut f = Fixture::new(None);
+    // The model's style is cyan; o switches the grid to the background.
+    f.open(Section::Segment(Kind::Model))
+        .press(&[KeyCode::Down, KeyCode::Enter])
+        .typing("o");
+    assert!(f.screen(110, 30).contains("o picks background"));
+    f.press(&[KeyCode::Right]);
+    let Mode::Style(picker) = &f.app.mode else {
+        panic!("the style picker is open");
+    };
+    // The cursor stays on cyan, so one step right is white.
+    assert_eq!(picker.text(), "cyan on white");
+    f.press(&[KeyCode::Enter]);
+    assert_eq!(f.app.doc.get(Field::Style("model")).text, "cyan on white");
+    // Read back, the grid starts on the color, and o moves it to the background's cell.
+    f.press(&[KeyCode::Enter]);
+    let Mode::Style(picker) = &mut f.app.mode else {
+        panic!("the style picker is open");
+    };
+    assert_eq!(picker.cursor, 6);
+    picker.switch_target();
+    assert_eq!(picker.cursor, 7);
+    f.press(&[KeyCode::Esc]);
+
+    f.open(Section::Separator)
+        .press(&[KeyCode::Down, KeyCode::Enter]);
+    assert!(f.screen(110, 30).contains("p powerline"));
+    f.typing("p").press(&[KeyCode::Enter]);
+    assert_eq!(
+        f.app.doc.text(),
+        "[colors]\nmodel = \"cyan on white\"\nseparator = \"powerline\"\n"
+    );
+    assert_eq!(
+        f.app.preview_config().unwrap().colors.separator,
+        SeparatorStyle::Powerline
+    );
+    // Only the separator can be powerline.
+    f.open(Section::Segment(Kind::Cost))
+        .press(&[KeyCode::Down, KeyCode::Enter]);
+    assert!(!f.screen(110, 30).contains("p powerline"));
+    assert!(Field::Style("cost").value("powerline").is_err());
 }
 
 #[test]

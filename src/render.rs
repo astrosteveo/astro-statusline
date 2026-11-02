@@ -6,7 +6,7 @@
 
 use unicode_width::UnicodeWidthStr;
 
-use crate::style::Style;
+use crate::style::{Color, Style};
 
 const RESET: &str = "\x1b[0m";
 
@@ -34,6 +34,16 @@ pub struct Segment {
     pub priority: u8,
     /// The most columns the segment may take, whatever room the line has.
     pub max_width: Option<u16>,
+    /// The segment's background, which powerline separators take their colors from.
+    pub background: Option<Color>,
+}
+
+/// How separators are drawn.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SeparatorStyle {
+    Styled(Style),
+    /// In the backgrounds of the segments on each side, with a closing one after the last.
+    Powerline,
 }
 
 impl Segment {
@@ -58,12 +68,18 @@ impl Segment {
             pieces,
             priority,
             max_width: None,
+            background: None,
         }
     }
 
     /// The segment cut to at most `max_width` columns when it's drawn.
     pub fn capped(self, max_width: Option<u16>) -> Self {
         Segment { max_width, ..self }
+    }
+
+    /// The segment with `background` as the background powerline separators see.
+    pub fn on(self, background: Option<Color>) -> Self {
+        Segment { background, ..self }
     }
 
     /// The segment's text, without its styles.
@@ -111,17 +127,29 @@ pub fn render(
     max_width: Option<usize>,
     color: bool,
 ) -> String {
-    render_row(segments, None, separator, separator_style, max_width, color)
+    let separator_style = SeparatorStyle::Styled(separator_style.clone());
+    render_row(
+        segments,
+        None,
+        separator,
+        &separator_style,
+        max_width,
+        color,
+    )
 }
 
 /// Renders a row as `render` does, with `right`, when there's a `fill`, pushed to the right edge of
 /// `max_width`. Both sides are fitted as one line, the fill counted as a separator, so the gap is
 /// never narrower than one. Without a `max_width` the fill is drawn as a separator.
+///
+/// Powerline separators, drawn only with color, take their colors from the backgrounds on each
+/// side, and a closing one follows the last segment of each side. The one closing the left side of
+/// a filled row stands where the fill's separator would.
 pub fn render_row(
     left: Vec<Segment>,
     right: Option<Vec<Segment>>,
     separator: &str,
-    separator_style: &Style,
+    separator_style: &SeparatorStyle,
     max_width: Option<usize>,
     color: bool,
 ) -> String {
@@ -138,27 +166,54 @@ pub fn render_row(
     segments.extend(cleaned(right.unwrap_or_default()));
     let separator = strip_controls(separator);
     let separator_width = separator.width();
+    let powerline = color && *separator_style == SeparatorStyle::Powerline;
+    // Room for the closing separator at the end of the line.
+    let closing = if powerline { separator_width } else { 0 };
     if let Some(max_width) = max_width {
-        fit(&mut segments, separator_width, max_width, &mut boundary);
+        fit(
+            &mut segments,
+            separator_width,
+            max_width.saturating_sub(closing),
+            &mut boundary,
+        );
     }
 
-    let separator = paint(&separator, separator_style, color);
+    let between = |left: Option<&Segment>, right: Option<&Segment>| match separator_style {
+        SeparatorStyle::Powerline if powerline => {
+            let style = Style::colors(
+                left.and_then(|s| s.background),
+                right.and_then(|s| s.background),
+            );
+            paint(&separator, &style, true)
+        }
+        SeparatorStyle::Powerline => separator.clone(),
+        SeparatorStyle::Styled(style) => paint(&separator, style, color),
+    };
     let join = |segments: &[Segment]| {
-        segments
-            .iter()
-            .map(|s| {
-                s.pieces
-                    .iter()
-                    .map(|piece| paint(&piece.text, &piece.style, color))
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>()
-            .join(&separator)
+        let mut out = String::new();
+        for (i, segment) in segments.iter().enumerate() {
+            for piece in &segment.pieces {
+                out.push_str(&paint(&piece.text, &piece.style, color));
+            }
+            match segments.get(i + 1) {
+                Some(next) => out.push_str(&between(Some(segment), Some(next))),
+                None if powerline => out.push_str(&between(Some(segment), None)),
+                None => {}
+            }
+        }
+        out
     };
     let (left, right) = segments.split_at(boundary);
     match max_width {
         Some(max_width) if filled && !right.is_empty() => {
-            let used = line_width(left, separator_width) + line_width(right, separator_width);
+            let closings = if powerline && !left.is_empty() {
+                2
+            } else {
+                usize::from(powerline)
+            };
+            let used = line_width(left, separator_width)
+                + line_width(right, separator_width)
+                + closings * separator_width;
             let gap = " ".repeat(max_width.saturating_sub(used));
             format!("{}{gap}{}", join(left), join(right))
         }
@@ -358,9 +413,53 @@ mod tests {
     }
 
     #[test]
+    fn draws_powerline_separators_in_the_neighbours_backgrounds() {
+        let on = |text: &str, color: &str, background: Color, priority| {
+            Segment::new(text, style(color), priority).on(Some(background))
+        };
+        let (blue, red) = (Color::Basic(4), Color::Basic(1));
+        let a = on("aaaa", "white on blue", blue, 2);
+        let b = on("bbbb", "white on red", red, 1);
+        let row = |left: Vec<Segment>, right: Option<Vec<Segment>>, max_width, color| {
+            super::render_row(
+                left,
+                right,
+                ">",
+                &SeparatorStyle::Powerline,
+                max_width,
+                color,
+            )
+        };
+        assert_eq!(
+            row(vec![a.clone(), b.clone()], None, None, true),
+            "\x1b[37;44maaaa\x1b[0m\x1b[34;41m>\x1b[0m\x1b[37;41mbbbb\x1b[0m\x1b[31m>\x1b[0m"
+        );
+        // The closing separator takes room too: 10 columns fit both, 9 don't.
+        assert_eq!(
+            row(vec![a.clone(), b.clone()], None, Some(10), false),
+            "aaaa>bbbb"
+        );
+        assert_eq!(
+            row(vec![a.clone(), b.clone()], None, Some(9), true),
+            "\x1b[37;44maaaa\x1b[0m\x1b[34m>\x1b[0m"
+        );
+        // Without color there's no closing separator, and the separator is plain.
+        assert_eq!(
+            row(vec![a.clone(), b.clone()], None, Some(9), false),
+            "aaaa>bbbb"
+        );
+        // A filled row closes each side.
+        assert_eq!(
+            row(vec![a], Some(vec![b]), Some(12), true),
+            "\x1b[37;44maaaa\x1b[0m\x1b[34m>\x1b[0m  \x1b[37;41mbbbb\x1b[0m\x1b[31m>\x1b[0m"
+        );
+    }
+
+    #[test]
     fn pushes_what_follows_a_fill_to_the_right_edge() {
         let row = |left: Vec<Segment>, right: Vec<Segment>, max_width, color| {
-            super::render_row(left, Some(right), " │ ", &style("dim"), max_width, color)
+            let dim = SeparatorStyle::Styled(style("dim"));
+            super::render_row(left, Some(right), " │ ", &dim, max_width, color)
         };
         let (a, b, c) = (seg("aaaa", 3), seg("bbbb", 2), seg("cc", 1));
         assert_eq!(

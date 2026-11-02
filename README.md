@@ -157,8 +157,32 @@ A style is words separated by spaces, each one of these:
 - A color, at most one per style: `black`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, or
   `white`, a `bright_` version of any of those such as `bright_red`, a 256-color number from `0` to
   `255` (quoted, as in `"208"`), or `"#rrggbb"`.
+- `on` and a color, at most once per style, for the background: `"black on cyan"`.
 
 For example, `model = "bold #ff8700"`. An empty string, `""`, draws plain text.
+
+`colors.separator = "powerline"` draws each separator in the backgrounds of the segments on either
+side of it, with one more after the last segment of a row, for the arrows of a powerline theme. Set
+`format.separator` to the arrow, such as `"\ue0b0"` (U+E0B0, from a Nerd Font), give segments
+backgrounds, and put spaces in their templates so the text doesn't touch the arrows:
+
+```toml
+[colors]
+model = "black on cyan"
+directory = "white on blue"
+context = "black on usage"
+separator = "powerline"
+
+[format]
+separator = "\ue0b0"
+model = " {name} "
+directory = " {name} "
+context = " {percent} "
+```
+
+`on usage` takes the usage color as the background. A placeholder's own style keeps its segment's
+background unless it names one, so the segment stays on its background throughout. With `NO_COLOR`
+powerline separators are drawn as plain text, with no closing one.
 
 The context and rate-limit segments take `usage_low`, `usage_medium`, or `usage_high` by how much is
 used: their styles default to `usage`, which stands for that usage style. `usage` works in those three

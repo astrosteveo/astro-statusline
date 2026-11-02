@@ -309,10 +309,18 @@ fn segment(kind: Kind, env: &Env) -> Option<Segment> {
     // `usage` in a style becomes the usage color of the percentage drawn.
     let resolve = |style: &Style| usage.map_or_else(|| style.clone(), |usage| style.resolve(usage));
     let base = resolve(colors.get(kind));
-    let pieces = text
-        .into_iter()
-        .map(|(text, style)| (text, style.map_or_else(|| base.clone(), resolve)));
-    Some(Segment::from_pieces(pieces, config.priority(kind)).capped(config.max_width.get(kind)))
+    // A placeholder's style keeps the segment's background unless it sets its own, so a segment
+    // on a background stays on it throughout.
+    let pieces = text.into_iter().map(|(text, style)| {
+        let style = style.map_or_else(|| base.clone(), |style| resolve(style).over(&base));
+        (text, style)
+    });
+    let segment = Segment::from_pieces(pieces, config.priority(kind));
+    Some(
+        segment
+            .capped(config.max_width.get(kind))
+            .on(base.background_color()),
+    )
 }
 
 /// The rate limit `kind` over a `window` seconds long, whose history `value` picks out of each
@@ -747,6 +755,47 @@ mod tests {
         assert_eq!(color("79.9"), style("yellow"));
         assert_eq!(color("80"), style("red"));
         assert_eq!(color("100"), style("red"));
+    }
+
+    #[test]
+    fn keeps_a_segment_on_its_background() {
+        let config = crate::config::parse(
+            r#"
+            segments = ["model", "context"]
+            colors.model = "black on cyan"
+            colors.context = "black on usage"
+            format.model = " {name:bold} "
+            format.context = " {percent:bold white on red} "
+            "#,
+        )
+        .unwrap();
+        let segments = draw(FULL, &config);
+        let pieces: Vec<Vec<(String, Style)>> = segments
+            .iter()
+            .map(|s| {
+                s.pieces
+                    .iter()
+                    .map(|p| (p.text.clone(), p.style.clone()))
+                    .collect()
+            })
+            .collect();
+        assert_eq!(
+            pieces,
+            [
+                vec![
+                    (" ".into(), style("black on cyan")),
+                    ("Opus".into(), style("bold on cyan")),
+                    (" ".into(), style("black on cyan")),
+                ],
+                vec![
+                    (" ".into(), style("black on green")),
+                    ("8%".into(), style("bold white on red")),
+                    (" ".into(), style("black on green")),
+                ],
+            ]
+        );
+        assert_eq!(segments[0].background, Some(crate::style::Color::Basic(6)));
+        assert_eq!(segments[1].background, Some(crate::style::Color::Basic(2)));
     }
 
     #[test]
