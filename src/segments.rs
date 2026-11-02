@@ -77,8 +77,9 @@ impl Kind {
         }
     }
 
-    /// When the line is too wide, lower priorities are dropped first.
-    fn priority(self) -> u8 {
+    /// When the line is too wide, lower priorities are dropped first, unless the config's
+    /// `drop_order` says otherwise.
+    pub fn default_priority(self) -> u8 {
         match self {
             Kind::Context => 100,
             Kind::Model => 90,
@@ -215,7 +216,7 @@ fn segment(kind: Kind, env: &Env) -> Option<Segment> {
             (text?, &colors.cost)
         }
     };
-    Some(Segment::new(text, style.clone(), kind.priority()))
+    Some(Segment::new(text, style.clone(), config.priority(kind)))
 }
 
 /// A rate limit over a `window` seconds long, whose history `value` picks out of each sample.

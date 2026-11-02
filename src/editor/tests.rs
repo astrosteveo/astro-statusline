@@ -271,6 +271,31 @@ fn opens_a_segment_from_the_layout() {
 }
 
 #[test]
+fn reorders_what_drops_first() {
+    let mut f = Fixture::new(Some("segments = [\"model\", \"directory\", \"cost\"]\n"));
+    f.open(Section::DropOrder);
+    let screen = f.screen(100, 30);
+    assert!(screen.contains("1. Cost  drops first"), "{screen}");
+    assert!(screen.contains("7. Context  drops last"), "{screen}");
+    // Directory is fifth; move it to the top.
+    f.press(&[KeyCode::Down; 4]).typing("KKKK");
+    assert_eq!(f.app.cursor, 0);
+    assert_eq!(
+        f.app.doc.text(),
+        "segments = [\"model\", \"directory\", \"cost\"]\ndrop_order = [\"directory\"]\n"
+    );
+    // 30 columns leave 26: "Opus 5.5 │ my-project │ $1.23" is 29, so the directory drops.
+    f.app.columns = Some(30);
+    let screen = f.screen(100, 30);
+    assert!(screen.contains("Opus 5.5 │ $1.23"), "{screen}");
+    f.typing("r");
+    assert_eq!(
+        f.app.doc.text(),
+        "segments = [\"model\", \"directory\", \"cost\"]\n"
+    );
+}
+
+#[test]
 fn sets_a_segment_s_thresholds() {
     let mut f = Fixture::new(None);
     f.open(Section::Segment(Kind::Context));

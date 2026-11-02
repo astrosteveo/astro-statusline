@@ -82,6 +82,10 @@ segments = ["model", "directory", "branch", "context", "five_hour", "seven_day",
 # Or several rows, top to bottom, instead of segments:
 # lines = [["model", "directory", "branch"], ["context", "five_hour", "seven_day", "cost"]]
 
+# Segments that drop first when a row is too wide, in this order. The rest drop in the default
+# order: cost, seven_day, five_hour, branch, directory, model, and context last.
+drop_order = []
+
 [colors]
 model = "cyan"
 directory = "blue"
@@ -219,7 +223,9 @@ context `{eta}` in the config, nothing is written.
 
 - **Narrow terminals**: Claude Code passes the terminal width in `COLUMNS`. When a row doesn't fit,
   segments drop in this order: cost, 7-day, 5-hour, branch, directory, model. Context goes last. The
-  order holds wherever the config puts them, and each row is fitted on its own.
+  order holds wherever the config puts them, and each row is fitted on its own. `drop_order` names
+  segments to drop first, in its order, ahead of the rest: `drop_order = ["branch"]` drops the branch
+  before the cost.
 - **Color**: set `NO_COLOR` to any non-empty value to turn colors off, whatever the config says.
 - **Git**: the branch comes from the repository's `HEAD` file, so no `git` process runs. Linked
   worktrees and submodules work. Repositories that use the reftable ref format show no branch.

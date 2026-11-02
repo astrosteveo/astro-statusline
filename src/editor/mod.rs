@@ -75,6 +75,7 @@ fn run(app: &mut App) -> io::Result<()> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Section {
     Layout,
+    DropOrder,
     Segment(Kind),
     Separator,
     UsageColors,
@@ -83,8 +84,9 @@ enum Section {
     ClaudeCode,
 }
 
-const SECTIONS: [Section; 13] = [
+const SECTIONS: [Section; 14] = [
     Section::Layout,
+    Section::DropOrder,
     Section::Segment(Kind::Model),
     Section::Segment(Kind::Directory),
     Section::Segment(Kind::Branch),
@@ -123,7 +125,7 @@ impl Section {
                 Field::BarMarker,
             ],
             Section::Graph => vec![Field::GraphWidth, Field::GraphChars],
-            Section::Layout | Section::ClaudeCode => Vec::new(),
+            Section::Layout | Section::DropOrder | Section::ClaudeCode => Vec::new(),
         }
     }
 }
@@ -549,6 +551,7 @@ impl App {
         }
         match self.section() {
             Section::Layout => self.layout_key(key),
+            Section::DropOrder => self.drop_order_key(key),
             Section::ClaudeCode => {
                 if key.code == KeyCode::Enter {
                     self.offer_claude_setup();
@@ -646,6 +649,38 @@ impl App {
             _ => {}
         }
         self.mode = Mode::Style(picker);
+    }
+
+    fn drop_order_key(&mut self, key: KeyEvent) {
+        let mut sequence = self.doc.drop_sequence();
+        let last = sequence.len() - 1;
+        self.cursor = self.cursor.min(last);
+        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+        let target = match key.code {
+            KeyCode::Up if shift => self.cursor.checked_sub(1),
+            KeyCode::Down if shift => (self.cursor < last).then_some(self.cursor + 1),
+            KeyCode::Char('K') => self.cursor.checked_sub(1),
+            KeyCode::Char('J') => (self.cursor < last).then_some(self.cursor + 1),
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.cursor = self.cursor.saturating_sub(1);
+                return;
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.cursor = (self.cursor + 1).min(last);
+                return;
+            }
+            KeyCode::Char('r') => {
+                self.doc
+                    .set_drop_sequence(&Config::default().drop_sequence());
+                return;
+            }
+            _ => return,
+        };
+        if let Some(target) = target {
+            sequence.swap(self.cursor, target);
+            self.doc.set_drop_sequence(&sequence);
+            self.cursor = target;
+        }
     }
 
     fn layout_key(&mut self, key: KeyEvent) {

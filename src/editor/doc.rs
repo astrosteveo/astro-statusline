@@ -6,7 +6,7 @@ use std::sync::LazyLock;
 
 use toml_edit::{Array, DocumentMut, Item, Key, Table, TableLike, Value};
 
-use crate::config::{self, DEFAULTS};
+use crate::config::{self, Config, DEFAULTS};
 use crate::segments::Kind;
 use crate::style::Style;
 use crate::template::Template;
@@ -240,6 +240,62 @@ impl Doc {
         root.remove("segments");
         root.remove("lines");
     }
+
+    /// Whether the file sets `drop_order`.
+    pub fn has_drop_order(&self) -> bool {
+        self.0.contains_key("drop_order")
+    }
+
+    /// Every segment in the order they drop on a narrow terminal, first to last, leaving out names
+    /// in `drop_order` that aren't segments or come twice.
+    pub fn drop_sequence(&self) -> Vec<Kind> {
+        let mut listed: Vec<Kind> = Vec::new();
+        let names = self.0.get("drop_order").and_then(Item::as_array);
+        for kind in names
+            .into_iter()
+            .flatten()
+            .filter_map(|name| name.as_str().and_then(Kind::from_name))
+        {
+            if !listed.contains(&kind) {
+                listed.push(kind);
+            }
+        }
+        let config = Config {
+            drop_order: listed,
+            ..Config::default()
+        };
+        config.drop_sequence()
+    }
+
+    /// Writes `drop_order` so segments drop in `sequence`, naming only those the default order
+    /// doesn't already put there. A segment added later then drops in its default place, not after
+    /// everything named. The default order takes the key out.
+    pub fn set_drop_sequence(&mut self, sequence: &[Kind]) {
+        let default_from = |start: usize| {
+            let mut rest = sequence[start..].to_vec();
+            rest.sort_by_key(|kind| kind.default_priority());
+            rest == sequence[start..]
+        };
+        let listed = (0..=sequence.len())
+            .find(|&start| default_from(start))
+            .unwrap_or(sequence.len());
+        let root = self.0.as_table_mut();
+        if listed == 0 {
+            root.remove("drop_order");
+            return;
+        }
+        let value = Value::Array(names(&sequence[..listed]));
+        match root.get_mut("drop_order") {
+            Some(Item::Value(old)) => {
+                let decor = old.decor().clone();
+                *old = value;
+                *old.decor_mut() = decor;
+            }
+            _ => {
+                root.insert("drop_order", Item::Value(value));
+            }
+        }
+    }
 }
 
 fn lookup<'d>(doc: &'d DocumentMut, table: &str, key: &str) -> Option<&'d Item> {
@@ -463,6 +519,34 @@ mod tests {
         assert_eq!(Doc::parse("").unwrap().rows(), [Kind::ALL]);
         let doc = doc("lines = [[\"model\", \"git\"], \"cost\"]");
         assert_eq!(doc.rows(), [vec![Kind::Model], vec![]]);
+    }
+
+    #[test]
+    fn writes_the_shortest_drop_order() {
+        use Kind::*;
+        let mut doc =
+            doc("# Mine.\ndrop_order = [\"branch\", \"git\", \"branch\"]  # first\n[colors]\n");
+        assert_eq!(
+            doc.drop_sequence(),
+            [Branch, Cost, SevenDay, FiveHour, Directory, Model, Context]
+        );
+        // Moving the cost first leaves the rest in the default order after it.
+        doc.set_drop_sequence(&[Cost, Branch, SevenDay, FiveHour, Directory, Model, Context]);
+        assert_eq!(
+            doc.text(),
+            "# Mine.\ndrop_order = [\"cost\", \"branch\"]  # first\n[colors]\n"
+        );
+        doc.set_drop_sequence(&[Cost, SevenDay, FiveHour, Branch, Directory, Model, Context]);
+        assert_eq!(doc.text(), "[colors]\n");
+        assert!(!doc.has_drop_order());
+
+        let mut doc = Doc::parse("[colors]\n").unwrap();
+        doc.set_drop_sequence(&[Cost, SevenDay, FiveHour, Branch, Directory, Context, Model]);
+        assert_eq!(
+            doc.text(),
+            "drop_order = [\"cost\", \"seven_day\", \"five_hour\", \"branch\", \"directory\", \"context\"]\n[colors]\n"
+        );
+        assert!(config::parse(&doc.text()).is_ok());
     }
 
     #[test]

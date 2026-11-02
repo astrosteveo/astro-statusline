@@ -23,6 +23,10 @@ segments = ["model", "directory", "branch", "context", "five_hour", "seven_day",
 # Or several rows, top to bottom, instead of segments:
 # lines = [["model", "directory", "branch"], ["context", "five_hour", "seven_day", "cost"]]
 
+# Segments that drop first when a row is too wide, in this order. The rest drop in the default
+# order: cost, seven_day, five_hour, branch, directory, model, and context last.
+drop_order = []
+
 [colors]
 model = "cyan"
 directory = "blue"
@@ -68,6 +72,8 @@ pub struct Config {
     pub segments: Option<Vec<Kind>>,
     /// Several rows, each a list of segments, top to bottom. Set this or `segments`, not both.
     pub lines: Option<Vec<Vec<Kind>>>,
+    /// Segments that drop first on a narrow terminal, in this order, ahead of the rest.
+    pub drop_order: Vec<Kind>,
     pub colors: Colors,
     pub thresholds: Thresholds,
     pub format: Format,
@@ -211,6 +217,23 @@ impl Config {
             (None, Some(lines)) => lines.iter().map(Vec::as_slice).collect(),
             (None, None) => vec![&Kind::ALL],
         }
+    }
+
+    /// Where `kind` stands when a row is too wide: lower drops first. The segments in `drop_order`
+    /// come first, in its order, and the rest follow in their default order.
+    pub fn priority(&self, kind: Kind) -> u8 {
+        match self.drop_order.iter().position(|&listed| listed == kind) {
+            // Below every default priority, which start at 40.
+            Some(index) => index as u8,
+            None => kind.default_priority(),
+        }
+    }
+
+    /// Every segment in the order they drop on a narrow terminal, first to last.
+    pub fn drop_sequence(&self) -> Vec<Kind> {
+        let mut kinds = Kind::ALL.to_vec();
+        kinds.sort_by_key(|&kind| self.priority(kind));
+        kinds
     }
 
     /// Whether any row shows `kind`.
@@ -415,6 +438,16 @@ fn read(path: &Path) -> Result<Config, String> {
     parse(&text).map_err(|error| format!("{}: {error}", path.display()))
 }
 
+/// Checks `drop_order`: each segment at most once.
+pub fn check_drop_order(kinds: &[Kind]) -> Result<(), String> {
+    for (i, kind) in kinds.iter().enumerate() {
+        if kinds[..i].contains(kind) {
+            return Err(format!("drop_order names {} twice", kind.name()));
+        }
+    }
+    Ok(())
+}
+
 /// Parses the text of a config file.
 pub fn parse(text: &str) -> Result<Config, String> {
     // A parse error ends in a newline.
@@ -423,6 +456,7 @@ pub fn parse(text: &str) -> Result<Config, String> {
     if config.segments.is_some() && config.lines.is_some() {
         return Err("set segments or lines, not both".to_string());
     }
+    check_drop_order(&config.drop_order)?;
     Ok(config)
 }
 
@@ -450,6 +484,34 @@ mod tests {
             Config::default()
         );
         assert_eq!(parse("").unwrap(), Config::default());
+    }
+
+    #[test]
+    fn drops_the_listed_segments_first() {
+        use Kind::*;
+        let default = Config::default();
+        assert_eq!(
+            default.drop_sequence(),
+            [Cost, SevenDay, FiveHour, Branch, Directory, Model, Context]
+        );
+        let config = parse("drop_order = [\"context\", \"branch\"]").unwrap();
+        assert_eq!(
+            config.drop_sequence(),
+            [Context, Branch, Cost, SevenDay, FiveHour, Directory, Model]
+        );
+        assert!(config.priority(Context) < config.priority(Branch));
+        assert!(config.priority(Branch) < config.priority(Cost));
+        assert_eq!(config.priority(Model), Model.default_priority());
+        let every: Vec<String> = Kind::ALL
+            .iter()
+            .rev()
+            .map(|k| format!("{:?}", k.name()))
+            .collect();
+        let config = parse(&format!("drop_order = [{}]", every.join(", "))).unwrap();
+        assert_eq!(
+            config.drop_sequence(),
+            Kind::ALL.iter().rev().copied().collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -541,6 +603,12 @@ mod tests {
             ("graph.chars = \"#\"", "must be 2 or more characters"),
             ("graph.chars = \"a\\nb\"", "must be 2 or more characters"),
             ("graph.chars = \"日本\"", "must be 2 or more characters"),
+            (
+                "drop_order = [\"cost\", \"cost\"]",
+                "drop_order names cost twice",
+            ),
+            ("drop_order = [\"git\"]", "unknown variant `git`"),
+            ("drop_order = \"cost\"", "invalid type"),
             ("thresholds.model = [50, 80]", "unknown field `model`"),
             (
                 "thresholds.context = [90, 80]",

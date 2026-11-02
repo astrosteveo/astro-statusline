@@ -154,6 +154,7 @@ fn draw_preview(
 fn section_title(section: Section) -> &'static str {
     match section {
         Section::Layout => "Layout",
+        Section::DropOrder => "Drop order",
         Section::Segment(kind) => segment_label(kind),
         Section::Separator => "Separator",
         Section::UsageColors => "Usage colors",
@@ -211,6 +212,7 @@ fn draw_detail(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(block, area);
     match section {
         Section::Layout => draw_layout(frame, app, inner, focused),
+        Section::DropOrder => draw_drop_order(frame, app, inner, focused),
         Section::ClaudeCode => draw_claude(frame, app, inner),
         section => draw_fields(frame, app, inner, section, focused),
     }
@@ -378,6 +380,44 @@ fn draw_fields(frame: &mut Frame, app: &App, area: Rect, section: Section, focus
     }
 }
 
+fn draw_drop_order(frame: &mut Frame, app: &App, area: Rect, focused: bool) {
+    let sequence = app.doc.drop_sequence();
+    let mut lines: Vec<Line> = sequence
+        .iter()
+        .enumerate()
+        .map(|(i, &kind)| {
+            let note = match i {
+                0 => "  drops first",
+                i if i + 1 == sequence.len() => "  drops last",
+                _ => "",
+            };
+            let style = if focused && i == app.cursor.min(sequence.len() - 1) {
+                highlight(true)
+            } else {
+                Style::default()
+            };
+            Line::from(vec![
+                Span::styled(format!(" {}. {}", i + 1, segment_label(kind)), style),
+                Span::styled(note, dim()),
+            ])
+        })
+        .collect();
+    lines.push(Line::raw(""));
+    let source = if app.doc.has_drop_order() {
+        " Segments named in drop_order go first, and the rest follow in the default order."
+    } else {
+        " The default order."
+    };
+    lines.push(Line::styled(
+        format!(
+            "{source} When a row is wider than the terminal, segments drop from the top of this \
+             list until it fits. Try it with < and >."
+        ),
+        dim(),
+    ));
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
+}
+
 fn draw_layout(frame: &mut Frame, app: &App, area: Rect, focused: bool) {
     let rows = app.doc.rows();
     let items = layout_items(&rows);
@@ -479,6 +519,9 @@ fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
         }
         (Mode::Normal, Focus::Detail, Section::Layout) => {
             "↑↓ choose  J K move  n new row  d remove  enter open  r reset  ← back  s save"
+        }
+        (Mode::Normal, Focus::Detail, Section::DropOrder) => {
+            "↑↓ choose  J K move  r reset to default  ← back  s save  q quit"
         }
         (Mode::Normal, Focus::Detail, Section::ClaudeCode) => "enter set up  ← back  q quit",
         (Mode::Normal, Focus::Detail, _) => {

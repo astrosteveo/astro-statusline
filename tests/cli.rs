@@ -121,6 +121,23 @@ fn renders_odd_values_byte_for_byte() {
 }
 
 #[test]
+fn drops_segments_in_the_configured_order() {
+    let input = br#"{"model": {"display_name": "Opus"}, "cwd": "/home/me/project",
+        "cost": {"total_cost_usd": 1.5}}"#;
+    let draw = |config: &str| {
+        let env = [("NO_COLOR", "1"), ("COLUMNS", "24")];
+        run_with_config(Some(config), input, &env).stdout
+    };
+    // "Opus │ project │ $1.50" is 22 columns; 24 leave 20.
+    assert_eq!(draw(""), "Opus │ project\n");
+    assert_eq!(draw("drop_order = [\"directory\"]"), "Opus │ $1.50\n");
+    assert_eq!(
+        draw("drop_order = [\"model\", \"cost\"]"),
+        "project │ $1.50\n"
+    );
+}
+
+#[test]
 fn honors_no_color_and_columns() {
     let input = br#"{"model": {"display_name": "Opus"}, "cwd": "/home/me/project"}"#;
     assert_eq!(run(input, &[("NO_COLOR", "1")]).stdout, "Opus │ project\n");
