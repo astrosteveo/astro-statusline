@@ -7,9 +7,9 @@ use std::str::FromStr;
 
 use serde::Deserialize;
 
-const ATTRIBUTES: [(&str, u8); 4] = [("bold", 1), ("dim", 2), ("italic", 3), ("underline", 4)];
+pub const ATTRIBUTES: [(&str, u8); 4] = [("bold", 1), ("dim", 2), ("italic", 3), ("underline", 4)];
 
-const COLORS: [&str; 8] = [
+pub const COLORS: [&str; 8] = [
     "black", "red", "green", "yellow", "blue", "magenta", "cyan", "white",
 ];
 
