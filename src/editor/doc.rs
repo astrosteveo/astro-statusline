@@ -27,6 +27,16 @@ pub enum Field {
     BarMarker,
     GraphWidth,
     GraphChars,
+    /// A percentage segment's `[thresholds]`.
+    Thresholds(Kind),
+}
+
+/// The TOML type a field is written as.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Shape {
+    Text,
+    Integer,
+    List,
 }
 
 impl Field {
@@ -42,11 +52,16 @@ impl Field {
             Field::BarMarker => ("bar", "marker"),
             Field::GraphWidth => ("graph", "width"),
             Field::GraphChars => ("graph", "chars"),
+            Field::Thresholds(kind) => ("thresholds", kind.name()),
         }
     }
 
-    fn is_number(self) -> bool {
-        matches!(self, Field::BarWidth | Field::GraphWidth)
+    fn shape(self) -> Shape {
+        match self {
+            Field::BarWidth | Field::GraphWidth => Shape::Integer,
+            Field::Thresholds(_) => Shape::List,
+            _ => Shape::Text,
+        }
     }
 
     /// Checks `text` as the field's value, giving the TOML value to write or what is wrong.
@@ -69,6 +84,22 @@ impl Field {
                 check(width)?;
                 // Checked to fit in a u8 above.
                 return Ok(Value::from(width as i64));
+            }
+            Field::Thresholds(_) => {
+                // Brackets are optional, so "60, 85" and "[60, 85]" both read.
+                let numbers = text
+                    .trim()
+                    .trim_start_matches('[')
+                    .trim_end_matches(']')
+                    .split([',', ' '])
+                    .filter(|word| !word.is_empty())
+                    .map(|word| {
+                        word.parse::<i64>()
+                            .map_err(|_| format!("{word:?} isn't a whole number"))
+                    })
+                    .collect::<Result<Vec<i64>, String>>()?;
+                let pair = config::check_thresholds(&numbers)?;
+                return Ok(Value::Array(pair.iter().map(|&n| i64::from(n)).collect()));
             }
         }?;
         Ok(Value::from(text))
@@ -112,11 +143,13 @@ impl Doc {
             };
         };
         let text = text_of(item);
-        let error = match (field.is_number(), item) {
-            (true, item) if item.is_integer() => field.value(&text).err(),
-            (true, _) => Some(format!("{text} isn't a number; write it without quotes")),
-            (false, item) if item.is_str() => field.value(&text).err(),
-            (false, _) => Some(format!("{text} isn't text; put it in quotes")),
+        let error = match (field.shape(), item) {
+            (Shape::Integer, item) if item.is_integer() => field.value(&text).err(),
+            (Shape::Integer, _) => Some(format!("{text} isn't a number; write it without quotes")),
+            (Shape::List, item) if item.is_array() => field.value(&text).err(),
+            (Shape::List, _) => Some(format!("{text} isn't a list; write it as [50, 80]")),
+            (Shape::Text, item) if item.is_str() => field.value(&text).err(),
+            (Shape::Text, _) => Some(format!("{text} isn't text; put it in quotes")),
         };
         Shown {
             text,
@@ -278,6 +311,32 @@ mod tests {
             "5h {percent}"
         );
         assert_eq!(doc.get(Field::Separator).text, " │ ");
+    }
+
+    #[test]
+    fn reads_and_writes_thresholds() {
+        let mut doc = doc("thresholds.context = [60, 85]  # mine\nthresholds.seven_day = 50\n");
+        let field = Field::Thresholds(Kind::Context);
+        assert_eq!(doc.get(field).text, "[60, 85]");
+        assert_eq!(doc.get(Field::Thresholds(Kind::FiveHour)).text, "[50, 80]");
+        assert!(
+            doc.get(Field::Thresholds(Kind::SevenDay))
+                .error
+                .unwrap()
+                .contains("isn't a list")
+        );
+
+        for text in ["70, 90", "[70, 90]", " 70 90 "] {
+            doc.set(field, field.value(text).unwrap());
+            assert_eq!(doc.get(field).text, "[70, 90]", "{text}");
+        }
+        assert!(
+            doc.text()
+                .starts_with("thresholds.context = [70, 90]  # mine\n")
+        );
+        for text in ["90, 70", "50", "a, b", "50, 80, 90", ""] {
+            assert!(field.value(text).is_err(), "{text}");
+        }
     }
 
     #[test]

@@ -271,6 +271,40 @@ fn opens_a_segment_from_the_layout() {
 }
 
 #[test]
+fn sets_a_segment_s_thresholds() {
+    let mut f = Fixture::new(None);
+    f.open(Section::Segment(Kind::Context));
+    assert!(
+        f.screen(110, 30)
+            .contains("Medium, high  [50, 80]  default")
+    );
+    f.press(&[KeyCode::Down, KeyCode::Enter]);
+    for _ in 0.."[50, 80]".len() {
+        f.press(&[KeyCode::Backspace]);
+    }
+    f.typing("80, 70").press(&[KeyCode::Enter]);
+    assert!(
+        f.screen(110, 30)
+            .contains("must be from 0 to 100, the first no larger")
+    );
+    for _ in 0.."80, 70".len() {
+        f.press(&[KeyCode::Backspace]);
+    }
+    f.typing("30, 40").press(&[KeyCode::Enter]);
+    assert_eq!(f.app.doc.text(), "[thresholds]\ncontext = [30, 40]\n");
+    let config = f.app.preview_config().unwrap();
+    assert_eq!(config.thresholds.context, [30, 40]);
+    // The 5-hour limit has its own, and the cost has none.
+    f.open(Section::Segment(Kind::FiveHour));
+    assert!(f.screen(110, 30).contains("Medium, high  [50, 80]"));
+    assert!(
+        !Section::Segment(Kind::Cost)
+            .fields()
+            .contains(&Field::Thresholds(Kind::Cost))
+    );
+}
+
+#[test]
 fn resets_a_field_to_its_default() {
     let mut f = Fixture::new(Some("[bar]\nwidth = 4\nfull = \"#\"\n"));
     f.open(Section::Bar).typing("r");

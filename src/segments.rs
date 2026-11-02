@@ -176,7 +176,7 @@ fn segment(kind: Kind, env: &Env) -> Option<Segment> {
                 "size" => window.context_window_size.map(units::tokens),
                 _ => None,
             });
-            (text?, usage_style(used, colors))
+            (text?, usage_style(used, colors, config.thresholds.context))
         }
         Kind::FiveHour => {
             let limit = session.rate_limits.as_ref()?.five_hour.as_ref()?;
@@ -185,6 +185,7 @@ fn segment(kind: Kind, env: &Env) -> Option<Segment> {
                 predict::FIVE_HOURS,
                 |s| s.five_hour,
                 &format.five_hour,
+                config.thresholds.five_hour,
                 env,
             )?
         }
@@ -195,6 +196,7 @@ fn segment(kind: Kind, env: &Env) -> Option<Segment> {
                 predict::SEVEN_DAYS,
                 |s| s.seven_day,
                 &format.seven_day,
+                config.thresholds.seven_day,
                 env,
             )?
         }
@@ -222,6 +224,7 @@ fn rate_limit<'a>(
     window: f64,
     value: fn(&Sample) -> Option<f64>,
     template: &Template,
+    thresholds: [u8; 2],
     env: &Env<'a>,
 ) -> Option<(String, &'a Style)> {
     let used = limit.used_percentage?;
@@ -246,7 +249,7 @@ fn rate_limit<'a>(
         "delta" => target.map(|target| delta(used, target)),
         _ => None,
     })?;
-    Some((text, usage_style(used, &env.config.colors)))
+    Some((text, usage_style(used, &env.config.colors, thresholds)))
 }
 
 /// A graph of `value` across the session's history, skipping samples without it.
@@ -284,11 +287,12 @@ fn whole_percent(value: f64) -> u64 {
     value.round().max(0.0) as u64
 }
 
-/// The low usage color below half, medium below 80%, and high from there up.
-fn usage_style(used: f64, colors: &Colors) -> &Style {
+/// The low usage color below the medium threshold, medium below the high one, and high from there
+/// up.
+fn usage_style(used: f64, colors: &Colors, [medium, high]: [u8; 2]) -> &Style {
     match used {
-        u if u < 50.0 => &colors.usage_low,
-        u if u < 80.0 => &colors.usage_medium,
+        u if u < f64::from(medium) => &colors.usage_low,
+        u if u < f64::from(high) => &colors.usage_medium,
         _ => &colors.usage_high,
     }
 }
@@ -636,6 +640,41 @@ mod tests {
         assert_eq!(color("79.9"), style("yellow"));
         assert_eq!(color("80"), style("red"));
         assert_eq!(color("100"), style("red"));
+    }
+
+    #[test]
+    fn colors_each_percentage_by_its_own_thresholds() {
+        let config = Config {
+            thresholds: crate::config::Thresholds {
+                context: [60, 85],
+                five_hour: [0, 100],
+                seven_day: [30, 30],
+            },
+            ..Config::default()
+        };
+        let input = |context: u8, five_hour: u8, seven_day: u8| {
+            format!(
+                r#"{{"context_window": {{"used_percentage": {context}}},
+                    "rate_limits": {{"five_hour": {{"used_percentage": {five_hour}}},
+                                     "seven_day": {{"used_percentage": {seven_day}}}}}}}"#
+            )
+        };
+        let colors = |context, five_hour, seven_day| -> Vec<Style> {
+            draw(&input(context, five_hour, seven_day), &config)
+                .into_iter()
+                .map(|s| s.style)
+                .collect()
+        };
+        let (green, yellow, red) = (style("green"), style("yellow"), style("red"));
+        assert_eq!(
+            colors(59, 0, 29),
+            [green.clone(), yellow.clone(), green.clone()]
+        );
+        assert_eq!(
+            colors(60, 99, 30),
+            [yellow.clone(), yellow.clone(), red.clone()]
+        );
+        assert_eq!(colors(85, 100, 100), [red.clone(), red.clone(), red]);
     }
 
     #[test]

@@ -8,8 +8,9 @@ Opus 5.5 │ astro-statusline │ main │ ctx 63% │ 5h 12% │ 7d 85% │ $1.
 
 From left to right: the model, the current directory, the git branch, how full the context window is,
 how much of the 5-hour and 7-day rate limits you've used, and the session's estimated cost. Percentages
-are green below 50%, yellow below 80%, and red from 80% up. A segment is left out until Claude Code sends
-its data. For example, rate limits appear only for claude.ai subscribers, after the first response.
+are green below 50%, yellow below 80%, and red from 80% up, unless the config moves those points. A
+segment is left out until Claude Code sends its data. For example, rate limits appear only for
+claude.ai subscribers, after the first response.
 A [config file](#configure) changes which segments show and in what order, their colors and text, and
 can add bars, graphs, predictions, and more rows.
 
@@ -87,10 +88,16 @@ directory = "blue"
 branch = "magenta"
 cost = "dim"
 separator = "dim"
-# Context and rate-limit percentages: below 50%, below 80%, and from 80% up.
+# Context and rate-limit percentages: low, medium, and high, as [thresholds] sets them.
 usage_low = "green"
 usage_medium = "yellow"
 usage_high = "red"
+
+# Where each percentage turns from low to medium, and from medium to high.
+[thresholds]
+context = [50, 80]
+five_hour = [50, 80]
+seven_day = [50, 80]
 
 [format]
 separator = " │ "
@@ -131,6 +138,10 @@ A style is words separated by spaces, each one of these:
   `255` (quoted, as in `"208"`), or `"#rrggbb"`.
 
 For example, `model = "bold #ff8700"`. An empty string, `""`, draws plain text.
+
+The context and rate-limit segments take `usage_low`, `usage_medium`, or `usage_high` by how much is
+used. `[thresholds]` sets where each one changes, in whole percents, for each segment on its own:
+`context = [60, 85]` draws the context in the low color below 60%, medium from 60%, and high from 85%.
 
 ### Formats
 

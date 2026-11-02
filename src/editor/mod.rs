@@ -15,7 +15,7 @@ use std::process::ExitCode;
 
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
-use crate::config::{self, Config};
+use crate::config::{self, Config, Thresholds};
 use crate::segments::Kind;
 use crate::style::COLORS;
 use doc::{Doc, Field};
@@ -105,6 +105,9 @@ impl Section {
             Section::Segment(kind) => {
                 let mut fields = vec![Field::Template(kind)];
                 fields.extend(own_style(kind).map(Field::Style));
+                if Thresholds::default().get(kind).is_some() {
+                    fields.push(Field::Thresholds(kind));
+                }
                 fields
             }
             Section::Separator => vec![Field::Separator, Field::Style("separator")],

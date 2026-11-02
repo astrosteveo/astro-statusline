@@ -29,10 +29,16 @@ directory = "blue"
 branch = "magenta"
 cost = "dim"
 separator = "dim"
-# Context and rate-limit percentages: below 50%, below 80%, and from 80% up.
+# Context and rate-limit percentages: low, medium, and high, as [thresholds] sets them.
 usage_low = "green"
 usage_medium = "yellow"
 usage_high = "red"
+
+# Where each percentage turns from low to medium, and from medium to high.
+[thresholds]
+context = [50, 80]
+five_hour = [50, 80]
+seven_day = [50, 80]
 
 [format]
 separator = " │ "
@@ -63,6 +69,7 @@ pub struct Config {
     /// Several rows, each a list of segments, top to bottom. Set this or `segments`, not both.
     pub lines: Option<Vec<Vec<Kind>>>,
     pub colors: Colors,
+    pub thresholds: Thresholds,
     pub format: Format,
     pub bar: Bar,
     pub graph: Graph,
@@ -76,12 +83,69 @@ pub struct Colors {
     pub branch: Style,
     pub cost: Style,
     pub separator: Style,
-    /// Context and rate-limit percentages below 50%.
+    /// Context and rate-limit percentages below their medium threshold.
     pub usage_low: Style,
-    /// Context and rate-limit percentages from 50% up to 80%.
+    /// Context and rate-limit percentages from their medium threshold up to their high one.
     pub usage_medium: Style,
-    /// Context and rate-limit percentages from 80% up.
+    /// Context and rate-limit percentages from their high threshold up.
     pub usage_high: Style,
+}
+
+/// Where each percentage segment turns from its low to its medium usage color, and from medium to
+/// high, as whole percents.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Thresholds {
+    #[serde(deserialize_with = "threshold_pair")]
+    pub context: [u8; 2],
+    #[serde(deserialize_with = "threshold_pair")]
+    pub five_hour: [u8; 2],
+    #[serde(deserialize_with = "threshold_pair")]
+    pub seven_day: [u8; 2],
+}
+
+impl Default for Thresholds {
+    fn default() -> Self {
+        Thresholds {
+            context: [50, 80],
+            five_hour: [50, 80],
+            seven_day: [50, 80],
+        }
+    }
+}
+
+impl Thresholds {
+    /// The thresholds for `kind`, or `None` for a segment without a percentage.
+    pub fn get(&self, kind: Kind) -> Option<[u8; 2]> {
+        match kind {
+            Kind::Context => Some(self.context),
+            Kind::FiveHour => Some(self.five_hour),
+            Kind::SevenDay => Some(self.seven_day),
+            Kind::Model | Kind::Directory | Kind::Branch | Kind::Cost => None,
+        }
+    }
+}
+
+fn threshold_pair<'de, D: Deserializer<'de>>(deserializer: D) -> Result<[u8; 2], D::Error> {
+    check_thresholds(&Vec::<i64>::deserialize(deserializer)?).map_err(de::Error::custom)
+}
+
+/// Checks a pair of thresholds: two whole percents, the first no larger than the second.
+pub fn check_thresholds(pair: &[i64]) -> Result<[u8; 2], String> {
+    let percent = |value: i64| u8::try_from(value).ok().filter(|value| *value <= 100);
+    match *pair {
+        [medium, high] => match (percent(medium), percent(high)) {
+            (Some(medium), Some(high)) if medium <= high => Ok([medium, high]),
+            _ => Err(format!(
+                "thresholds [{medium}, {high}] must be from 0 to 100, the first no larger than \
+                 the second"
+            )),
+        },
+        _ => Err(format!(
+            "thresholds need two numbers, such as [50, 80], not {}",
+            pair.len()
+        )),
+    }
 }
 
 /// The text of each part of the line. Each segment's template is checked against the
@@ -389,6 +453,16 @@ mod tests {
     }
 
     #[test]
+    fn reads_thresholds_per_segment() {
+        let config = parse("thresholds.context = [60, 85]\nthresholds.seven_day = [0, 0]").unwrap();
+        assert_eq!(config.thresholds.get(Kind::Context), Some([60, 85]));
+        assert_eq!(config.thresholds.get(Kind::FiveHour), Some([50, 80]));
+        assert_eq!(config.thresholds.get(Kind::SevenDay), Some([0, 0]));
+        assert_eq!(config.thresholds.get(Kind::Cost), None);
+        assert_eq!(check_thresholds(&[100, 100]), Ok([100, 100]));
+    }
+
+    #[test]
     fn keys_left_out_keep_their_defaults() {
         let config = parse(
             r##"
@@ -467,6 +541,26 @@ mod tests {
             ("graph.chars = \"#\"", "must be 2 or more characters"),
             ("graph.chars = \"a\\nb\"", "must be 2 or more characters"),
             ("graph.chars = \"日本\"", "must be 2 or more characters"),
+            ("thresholds.model = [50, 80]", "unknown field `model`"),
+            (
+                "thresholds.context = [90, 80]",
+                "thresholds [90, 80] must be from 0",
+            ),
+            (
+                "thresholds.context = [50, 101]",
+                "thresholds [50, 101] must be from 0",
+            ),
+            (
+                "thresholds.context = [-1, 80]",
+                "thresholds [-1, 80] must be from 0",
+            ),
+            ("thresholds.context = [50]", "thresholds need two numbers"),
+            (
+                "thresholds.context = [50, 60, 70]",
+                "thresholds need two numbers",
+            ),
+            ("thresholds.context = [50.5, 80]", "invalid type"),
+            ("thresholds.context = 50", "invalid type"),
         ];
         for (text, expected) in cases {
             let error = parse(text).unwrap_err();

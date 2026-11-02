@@ -219,9 +219,10 @@ fn draw_detail(frame: &mut Frame, app: &App, area: Rect) {
 fn field_label(section: Section, field: Field) -> &'static str {
     match field {
         Field::Template(_) => "Template",
-        Field::Style("usage_low") => "Below 50%",
-        Field::Style("usage_medium") => "50% to 80%",
-        Field::Style("usage_high") => "From 80%",
+        Field::Style("usage_low") => "Low",
+        Field::Style("usage_medium") => "Medium",
+        Field::Style("usage_high") => "High",
+        Field::Thresholds(_) => "Medium, high",
         Field::Style(_) => "Style",
         Field::Separator => "Text",
         Field::BarWidth | Field::GraphWidth => "Width",
@@ -237,7 +238,9 @@ fn field_label(section: Section, field: Field) -> &'static str {
 /// sample of itself.
 fn value_spans(field: Field, text: &str) -> Vec<Span<'static>> {
     match field {
-        Field::BarWidth | Field::GraphWidth => vec![Span::raw(text.to_string())],
+        Field::BarWidth | Field::GraphWidth | Field::Thresholds(_) => {
+            vec![Span::raw(text.to_string())]
+        }
         Field::Style(_) => {
             let mut spans = vec![Span::raw(if text.is_empty() {
                 "\"\" (plain)".to_string()
@@ -305,7 +308,8 @@ fn draw_fields(frame: &mut Frame, app: &App, area: Rect, section: Section, focus
     if let Section::Segment(kind) = section {
         if own_style(kind).is_none() {
             lines.push(Line::styled(
-                " Drawn in the usage colors, from Usage colors.",
+                " Drawn in the usage colors, from Usage colors. Medium, high: the percentages \
+                 where the color turns medium, then high.",
                 dim(),
             ));
         }
@@ -321,6 +325,13 @@ fn draw_fields(frame: &mut Frame, app: &App, area: Rect, section: Section, focus
         lines.push(Line::styled(
             " Text in [ ] shows only when every value in it is there. {{ }} [[ ]] write braces \
              and brackets. The README says what each placeholder shows.",
+            dim(),
+        ));
+    }
+    if section == Section::UsageColors {
+        lines.push(Line::styled(
+            " The context and rate limits take these by how much is used. Each segment sets where \
+             they change.",
             dim(),
         ));
     }
