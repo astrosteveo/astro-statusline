@@ -17,7 +17,7 @@ use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, Ke
 
 use crate::config::{self, Config, Thresholds};
 use crate::segments::Kind;
-use crate::style::COLORS;
+use crate::style::{COLORS, Color, Ink, Style};
 use doc::{Doc, Field};
 use preview::SCENARIOS;
 
@@ -113,7 +113,7 @@ impl Section {
         match self {
             Section::Segment(kind) => {
                 let mut fields = vec![Field::Template(kind)];
-                fields.extend(own_style(kind).map(Field::Style));
+                fields.push(Field::Style(kind.name()));
                 if Thresholds::default().get(kind).is_some() {
                     fields.push(Field::Thresholds(kind));
                 }
@@ -142,14 +142,6 @@ impl Section {
             Section::Graph => vec![Field::GraphWidth, Field::GraphChars],
             Section::Layout | Section::DropOrder => Vec::new(),
         }
-    }
-}
-
-/// The `[colors]` key of a segment drawn in a style of its own. The others take the usage colors.
-fn own_style(kind: Kind) -> Option<&'static str> {
-    match kind {
-        Kind::Model | Kind::Directory | Kind::Branch | Kind::Cost => Some(kind.name()),
-        Kind::Context | Kind::FiveHour | Kind::SevenDay => None,
     }
 }
 
@@ -274,49 +266,35 @@ enum PickedColor {
     Index(u8),
     /// A color the grid doesn't hold, such as `#ff8700`, as written.
     Other(String),
+    Usage,
 }
 
 impl Picker {
+    /// The picker on the style `text`, or on plain text when the file's style has a mistake.
     fn new(field: Field, text: &str) -> Self {
-        let mut picker = Picker {
-            field,
-            attributes: [false; 4],
-            color: None,
-            cursor: 0,
-        };
-        for word in text.split_whitespace() {
-            let lower = word.to_ascii_lowercase();
-            if let Some(i) = crate::style::ATTRIBUTES
-                .iter()
-                .position(|(name, _)| *name == lower)
-            {
-                picker.attributes[i] = true;
-                continue;
+        let style: Style = text.parse().unwrap_or_default();
+        let color = style.ink().map(|ink| match ink {
+            Ink::Usage => PickedColor::Usage,
+            Ink::Color(Color::Basic(index) | Color::Indexed(index)) => PickedColor::Index(index),
+            Ink::Color(Color::Rgb(r, g, b)) => {
+                PickedColor::Other(format!("#{r:02x}{g:02x}{b:02x}"))
             }
-            let (offset, name) = match lower.strip_prefix("bright_") {
-                Some(name) => (8, name),
-                None => (0, lower.as_str()),
-            };
-            let index = COLORS
-                .iter()
-                .position(|color| *color == name)
-                .map(|i| i as u8 + offset)
-                .or_else(|| {
-                    lower
-                        .bytes()
-                        .all(|b| b.is_ascii_digit())
-                        .then(|| lower.parse().ok())
-                        .flatten()
-                });
-            picker.color = Some(match index {
-                Some(index) => {
-                    picker.cursor = index;
-                    PickedColor::Index(index)
-                }
-                None => PickedColor::Other(word.to_string()),
-            });
+        });
+        let cursor = match color {
+            Some(PickedColor::Index(index)) => index,
+            _ => 0,
+        };
+        Picker {
+            field,
+            attributes: style.attribute_flags(),
+            color,
+            cursor,
         }
-        picker
+    }
+
+    /// Whether the field's style can take the usage color.
+    fn allows_usage(&self) -> bool {
+        matches!(self.field, Field::Style(key) if Kind::from_name(key).is_some_and(Kind::has_usage))
     }
 
     /// The style as the config file spells it.
@@ -332,6 +310,7 @@ impl Picker {
             PickedColor::Index(index @ 8..16) => format!("bright_{}", COLORS[*index as usize - 8]),
             PickedColor::Index(index) => index.to_string(),
             PickedColor::Other(text) => text.clone(),
+            PickedColor::Usage => "usage".to_string(),
         }));
         words.join(" ")
     }
@@ -649,6 +628,7 @@ impl App {
                 picker.attributes[i] = !picker.attributes[i];
             }
             KeyCode::Char('x') => picker.color = None,
+            KeyCode::Char('U') if picker.allows_usage() => picker.color = Some(PickedColor::Usage),
             KeyCode::Char('t') => {
                 self.mode = Mode::Edit(Edit {
                     field: picker.field,

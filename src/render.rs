@@ -20,21 +20,67 @@ pub fn max_width(columns: usize, padding: u16) -> usize {
     columns.saturating_sub(EDGE_RESERVE + 2 * usize::from(padding))
 }
 
+/// Text drawn in one style.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Segment {
+pub struct Piece {
     pub text: String,
     pub style: Style,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Segment {
+    pub pieces: Vec<Piece>,
     /// When the line is too wide, lower priorities are dropped first.
     pub priority: u8,
 }
 
 impl Segment {
+    /// A segment drawn in one style.
+    #[cfg(test)]
     pub fn new(text: impl Into<String>, style: Style, priority: u8) -> Self {
-        Segment {
-            text: text.into(),
-            style,
-            priority,
+        Segment::from_pieces([(text.into(), style)], priority)
+    }
+
+    /// The style of the segment's first piece.
+    #[cfg(test)]
+    pub fn style(&self) -> Style {
+        self.pieces[0].style.clone()
+    }
+
+    pub fn from_pieces(pieces: impl IntoIterator<Item = (String, Style)>, priority: u8) -> Self {
+        let pieces = pieces
+            .into_iter()
+            .map(|(text, style)| Piece { text, style })
+            .collect();
+        Segment { pieces, priority }
+    }
+
+    /// The segment's text, without its styles.
+    #[cfg(test)]
+    pub fn text(&self) -> String {
+        self.pieces
+            .iter()
+            .map(|piece| piece.text.as_str())
+            .collect()
+    }
+
+    fn width(&self) -> usize {
+        self.pieces.iter().map(|piece| piece.text.width()).sum()
+    }
+
+    /// The segment with control characters stripped, empty pieces dropped, and neighbours of the
+    /// same style joined, so each style is turned on once.
+    fn cleaned(self) -> Segment {
+        let mut pieces: Vec<Piece> = Vec::new();
+        for piece in self.pieces {
+            let text = strip_controls(&piece.text);
+            match pieces.last_mut() {
+                _ if text.is_empty() => {}
+                Some(last) if last.style == piece.style => last.text.push_str(&text),
+                _ => pieces.push(Piece { text, ..piece }),
+            }
         }
+        Segment { pieces, ..self }
     }
 }
 
@@ -49,11 +95,8 @@ pub fn render(
 ) -> String {
     let mut segments: Vec<Segment> = segments
         .into_iter()
-        .map(|s| Segment {
-            text: strip_controls(&s.text),
-            ..s
-        })
-        .filter(|s| !s.text.is_empty())
+        .map(Segment::cleaned)
+        .filter(|s| !s.pieces.is_empty())
         .collect();
     let separator = strip_controls(separator);
     if let Some(max_width) = max_width {
@@ -63,7 +106,12 @@ pub fn render(
     let separator = paint(&separator, separator_style, color);
     segments
         .iter()
-        .map(|s| paint(&s.text, &s.style, color))
+        .map(|s| {
+            s.pieces
+                .iter()
+                .map(|piece| paint(&piece.text, &piece.style, color))
+                .collect::<String>()
+        })
         .collect::<Vec<_>>()
         .join(&separator)
 }
@@ -85,32 +133,54 @@ fn fit(segments: &mut Vec<Segment>, separator_width: usize, max_width: usize) {
         }
     }
     if let [only] = segments.as_mut_slice()
-        && only.text.width() > max_width
+        && only.width() > max_width
     {
-        only.text = truncate(&only.text, max_width);
+        truncate(&mut only.pieces, max_width);
     }
 }
 
 fn line_width(segments: &[Segment], separator_width: usize) -> usize {
-    let text: usize = segments.iter().map(|s| s.text.width()).sum();
+    let text: usize = segments.iter().map(Segment::width).sum();
     text + separator_width * segments.len().saturating_sub(1)
 }
 
-/// Cuts `text` to at most `max_width` columns, ending in an ellipsis.
-fn truncate(text: &str, max_width: usize) -> String {
+/// Cuts `pieces` to at most `max_width` columns, ending in an ellipsis in the style of the piece
+/// it cuts.
+fn truncate(pieces: &mut Vec<Piece>, max_width: usize) {
     let Some(budget) = max_width.checked_sub(1) else {
-        return String::new();
+        pieces.clear();
+        return;
     };
+    let mut used = 0;
+    let mut kept = Vec::new();
+    for mut piece in pieces.drain(..) {
+        let width = piece.text.width();
+        if used + width <= budget {
+            used += width;
+            kept.push(piece);
+            continue;
+        }
+        piece.text = cut(&piece.text, budget - used);
+        kept.push(piece);
+        break;
+    }
+    if let Some(last) = kept.last_mut() {
+        last.text.push('…');
+    }
+    *pieces = kept;
+}
+
+/// The start of `text` that fits in `width` columns.
+fn cut(text: &str, width: usize) -> String {
     let mut out = String::new();
     for c in text.chars() {
         let start = out.len();
         out.push(c);
-        if out.width() > budget {
+        if out.width() > width {
             out.truncate(start);
             break;
         }
     }
-    out.push('…');
     out
 }
 
@@ -204,6 +274,45 @@ mod tests {
     fn drops_the_rightmost_of_equal_priorities() {
         let line = render(vec![seg("aaaa", 1), seg("bbbb", 1)], Some(10), false);
         assert_eq!(line, "aaaa");
+    }
+
+    #[test]
+    fn draws_each_piece_in_its_style_and_joins_neighbours_of_the_same() {
+        let pieces = |list: &[(&str, &str)]| {
+            Segment::from_pieces(list.iter().map(|(text, s)| (text.to_string(), style(s))), 1)
+        };
+        let segment = pieces(&[
+            ("ctx ", "dim"),
+            ("42", "green"),
+            ("%", "green"),
+            ("", "red"),
+        ]);
+        assert_eq!(
+            render(vec![segment], None, true),
+            "\x1b[2mctx \x1b[0m\x1b[32m42%\x1b[0m"
+        );
+        let segment = pieces(&[("a\x1b", "dim"), ("\x07", "red"), ("b", "dim")]);
+        assert_eq!(render(vec![segment], None, true), "\x1b[2mab\x1b[0m");
+        // A segment of empty pieces is left out.
+        let empty = pieces(&[("", "dim")]);
+        assert_eq!(render(vec![empty, seg("x", 1)], None, false), "x");
+    }
+
+    #[test]
+    fn truncates_across_pieces_in_the_style_of_the_piece_it_cuts() {
+        let segment = Segment::from_pieces(
+            [
+                ("ctx ".to_string(), style("dim")),
+                ("4242".to_string(), style("red")),
+            ],
+            1,
+        );
+        assert_eq!(
+            render(vec![segment.clone()], Some(6), true),
+            "\x1b[2mctx \x1b[0m\x1b[31m4…\x1b[0m"
+        );
+        assert_eq!(render(vec![segment.clone()], Some(5), false), "ctx …");
+        assert_eq!(render(vec![segment], Some(3), true), "\x1b[2mct…\x1b[0m");
     }
 
     #[test]

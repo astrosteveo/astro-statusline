@@ -34,6 +34,10 @@ padding = 0
 model = "cyan"
 directory = "blue"
 branch = "magenta"
+# usage takes the usage color below, by how much is used.
+context = "usage"
+five_hour = "usage"
+seven_day = "usage"
 cost = "dim"
 separator = "dim"
 # Context and rate-limit percentages: low, medium, and high, as [thresholds] sets them.
@@ -141,17 +145,60 @@ pub fn check_show_from(value: f64) -> Result<f64, String> {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Colors {
+    #[serde(deserialize_with = "plain_style")]
     pub model: Style,
+    #[serde(deserialize_with = "plain_style")]
     pub directory: Style,
+    #[serde(deserialize_with = "plain_style")]
     pub branch: Style,
+    pub context: Style,
+    pub five_hour: Style,
+    pub seven_day: Style,
+    #[serde(deserialize_with = "plain_style")]
     pub cost: Style,
+    #[serde(deserialize_with = "plain_style")]
     pub separator: Style,
     /// Context and rate-limit percentages below their medium threshold.
+    #[serde(deserialize_with = "plain_style")]
     pub usage_low: Style,
     /// Context and rate-limit percentages from their medium threshold up to their high one.
+    #[serde(deserialize_with = "plain_style")]
     pub usage_medium: Style,
     /// Context and rate-limit percentages from their high threshold up.
+    #[serde(deserialize_with = "plain_style")]
     pub usage_high: Style,
+}
+
+impl Colors {
+    /// The style of segment `kind`.
+    pub fn get(&self, kind: Kind) -> &Style {
+        match kind {
+            Kind::Model => &self.model,
+            Kind::Directory => &self.directory,
+            Kind::Branch => &self.branch,
+            Kind::Context => &self.context,
+            Kind::FiveHour => &self.five_hour,
+            Kind::SevenDay => &self.seven_day,
+            Kind::Cost => &self.cost,
+        }
+    }
+}
+
+fn plain_style<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Style, D::Error> {
+    let style = Style::deserialize(deserializer)?;
+    check_plain_style(&style).map_err(de::Error::custom)?;
+    Ok(style)
+}
+
+/// Checks a style drawn without a percentage, which has no usage color to take.
+pub fn check_plain_style(style: &Style) -> Result<(), String> {
+    if style.uses_usage() {
+        return Err(
+            "usage is only for the context, five_hour, and seven_day styles and templates"
+                .to_string(),
+        );
+    }
+    Ok(())
 }
 
 /// Where each percentage segment turns from its low to its medium usage color, and from medium to
@@ -470,9 +517,8 @@ pub fn check_cell(text: &str) -> Result<(), String> {
 
 impl Default for Format {
     fn default() -> Self {
-        let template = |kind: Kind, text: &str| {
-            Template::parse(text, kind.placeholders()).expect("default templates parse")
-        };
+        let template =
+            |kind: Kind, text: &str| kind.parse_template(text).expect("default templates parse");
         Format {
             separator: Separators(vec![" │ ".to_string()]),
             model: template(Kind::Model, "{name}"),
@@ -488,7 +534,7 @@ impl Default for Format {
 
 fn template<'de, D: Deserializer<'de>>(deserializer: D, kind: Kind) -> Result<Template, D::Error> {
     let text = String::deserialize(deserializer)?;
-    Template::parse(&text, kind.placeholders()).map_err(de::Error::custom)
+    kind.parse_template(&text).map_err(de::Error::custom)
 }
 
 fn model_template<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Template, D::Error> {
@@ -526,6 +572,9 @@ impl Default for Colors {
             model: style("cyan"),
             directory: style("blue"),
             branch: style("magenta"),
+            context: style("usage"),
+            five_hour: style("usage"),
+            seven_day: style("usage"),
             cost: style("dim"),
             separator: style("dim"),
             usage_low: style("green"),
@@ -775,6 +824,23 @@ mod tests {
             ),
             ("drop_order = [\"git\"]", "unknown variant `git`"),
             ("drop_order = \"cost\"", "invalid type"),
+            (
+                "colors.model = \"usage\"",
+                "usage is only for the context, five_hour",
+            ),
+            (
+                "colors.usage_low = \"bold usage\"",
+                "usage is only for the context",
+            ),
+            (
+                "colors.separator = \"usage\"",
+                "usage is only for the context",
+            ),
+            (
+                "format.cost = \"{usd:usage}\"",
+                "usage is only for the context and rate-limit",
+            ),
+            ("format.cost = \"{usd:purple}\"", "unknown style \"purple\""),
             ("show_from.model = 1", "unknown field `model`"),
             (
                 "show_from.cost = -1",

@@ -210,11 +210,39 @@ fn reads_styles_into_the_picker_and_back() {
         ("bold #ff8700", "bold #ff8700"),
         ("Bright_Red underline", "underline bright_red"),
         ("208 dim", "dim 208"),
+        ("bold usage", "bold usage"),
         ("", ""),
     ] {
-        assert_eq!(Picker::new(Field::Style("model"), text).text(), expected);
+        assert_eq!(Picker::new(Field::Style("context"), text).text(), expected);
     }
     assert_eq!(Picker::new(Field::Style("model"), "bright_red").cursor, 9);
+}
+
+#[test]
+fn picks_the_usage_color_only_where_there_is_one() {
+    let mut f = Fixture::new(None);
+    f.open(Section::Segment(Kind::Context))
+        .press(&[KeyCode::Down]);
+    let screen = f.screen(110, 30);
+    assert!(screen.contains("Style         usage"), "{screen}");
+    f.press(&[KeyCode::Enter, KeyCode::Right]);
+    assert!(f.screen(110, 30).contains("U usage"));
+    f.typing("bU").press(&[KeyCode::Enter]);
+    assert_eq!(f.app.doc.text(), "[colors]\ncontext = \"bold usage\"\n");
+
+    // The model has no percentage, so no usage color.
+    f.open(Section::Segment(Kind::Model))
+        .press(&[KeyCode::Down, KeyCode::Enter]);
+    assert!(!f.screen(110, 30).contains("U usage"));
+    f.typing("U").press(&[KeyCode::Enter]);
+    assert_eq!(f.app.doc.get(Field::Style("model")).text, "cyan");
+    assert!(Field::Style("model").value("usage").is_err());
+    assert!(Field::Template(Kind::Model).value("{name:usage}").is_err());
+    assert!(
+        Field::Template(Kind::Context)
+            .value("{percent:usage}")
+            .is_ok()
+    );
 }
 
 #[test]
@@ -415,7 +443,8 @@ fn sets_a_segment_s_thresholds() {
         f.screen(110, 30)
             .contains("Medium, high  [50, 80]  default")
     );
-    f.press(&[KeyCode::Down, KeyCode::Enter]);
+    // Template, style, then thresholds.
+    f.press(&[KeyCode::Down, KeyCode::Down, KeyCode::Enter]);
     for _ in 0.."[50, 80]".len() {
         f.press(&[KeyCode::Backspace]);
     }

@@ -1,7 +1,7 @@
 //! How a piece of the line is drawn, written the way the config file spells it: words separated
 //! by spaces, each an attribute (`bold`, `dim`, `italic`, `underline`) or a foreground color (a
-//! name such as `cyan` or `bright_red`, a 256-color index from 0 to 255, or `#rrggbb`). An empty
-//! string draws plain text.
+//! name such as `cyan` or `bright_red`, a 256-color index from 0 to 255, `#rrggbb`, or `usage`
+//! for the usage color of the value drawn). An empty string draws plain text.
 
 use std::str::FromStr;
 
@@ -13,19 +13,83 @@ pub const COLORS: [&str; 8] = [
     "black", "red", "green", "yellow", "blue", "magenta", "cyan", "white",
 ];
 
-/// The parameters of an ANSI SGR escape, such as `1;36` for bold cyan.
+/// A terminal color.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Color {
+    /// One of the 16 colors of the terminal's theme: the 8 in `COLORS`, then their bright versions.
+    Basic(u8),
+    /// A color of the 256-color palette, by number.
+    Indexed(u8),
+    Rgb(u8, u8, u8),
+}
+
+impl Color {
+    /// The SGR parameters that set this color as the foreground.
+    fn foreground(self) -> Vec<u8> {
+        match self {
+            Color::Basic(index @ 0..8) => vec![30 + index],
+            Color::Basic(index) => vec![90 + index - 8],
+            Color::Indexed(index) => vec![38, 5, index],
+            Color::Rgb(r, g, b) => vec![38, 2, r, g, b],
+        }
+    }
+}
+
+/// The color text is drawn in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ink {
+    Color(Color),
+    /// The usage style of the percentage drawn, by how much is used.
+    Usage,
+}
+
+/// Attributes and at most one color.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(try_from = "String")]
-pub struct Style(Vec<u8>);
+pub struct Style {
+    /// SGR parameters, such as 1 for bold, in the order written.
+    attributes: Vec<u8>,
+    ink: Option<Ink>,
+}
 
 impl Style {
-    /// The escape that turns this style on, or `None` for plain text.
+    /// The escape that turns this style on, or `None` for plain text. A style is resolved before
+    /// it's drawn, so `usage` has become a color by then.
     pub fn escape(&self) -> Option<String> {
-        if self.0.is_empty() {
+        let mut params = self.attributes.clone();
+        if let Some(Ink::Color(color)) = self.ink {
+            params.extend(color.foreground());
+        }
+        if params.is_empty() {
             return None;
         }
-        let params: Vec<String> = self.0.iter().map(u8::to_string).collect();
+        let params: Vec<String> = params.iter().map(u8::to_string).collect();
         Some(format!("\x1b[{}m", params.join(";")))
+    }
+
+    /// Whether the style takes the usage color.
+    pub fn uses_usage(&self) -> bool {
+        self.ink == Some(Ink::Usage)
+    }
+
+    /// The style with `usage` replaced by the attributes and color of `usage`.
+    pub fn resolve(&self, usage: &Style) -> Style {
+        if !self.uses_usage() {
+            return self.clone();
+        }
+        Style {
+            attributes: [&self.attributes[..], &usage.attributes[..]].concat(),
+            ink: usage.ink,
+        }
+    }
+
+    /// The attributes that are on, by their place in `ATTRIBUTES`.
+    pub fn attribute_flags(&self) -> [bool; 4] {
+        ATTRIBUTES.map(|(_, code)| self.attributes.contains(&code))
+    }
+
+    pub fn ink(&self) -> Option<Ink> {
+        self.ink
     }
 }
 
@@ -33,26 +97,28 @@ impl FromStr for Style {
     type Err = String;
 
     fn from_str(text: &str) -> Result<Self, Self::Err> {
-        let mut attributes = Vec::new();
-        let mut color: Option<Vec<u8>> = None;
+        let mut style = Style::default();
         for word in text.split_whitespace() {
             let lower = word.to_ascii_lowercase();
             if let Some(&(_, code)) = ATTRIBUTES.iter().find(|(name, _)| *name == lower) {
-                attributes.push(code);
+                style.attributes.push(code);
                 continue;
             }
-            let parsed = parse_color(&lower).ok_or_else(|| {
-                format!(
-                    "unknown style {word:?}: expected bold, dim, italic, underline, a color name \
-                     such as cyan or bright_red, a number from 0 to 255, or #rrggbb"
-                )
-            })?;
-            if color.replace(parsed).is_some() {
+            let ink = match lower.as_str() {
+                "usage" => Ink::Usage,
+                _ => Ink::Color(parse_color(&lower).ok_or_else(|| {
+                    format!(
+                        "unknown style {word:?}: expected bold, dim, italic, underline, a color \
+                         name such as cyan or bright_red, a number from 0 to 255, #rrggbb, or \
+                         usage"
+                    )
+                })?),
+            };
+            if style.ink.replace(ink).is_some() {
                 return Err(format!("style {text:?} has more than one color"));
             }
         }
-        attributes.extend(color.unwrap_or_default());
-        Ok(Style(attributes))
+        Ok(style)
     }
 }
 
@@ -64,28 +130,27 @@ impl TryFrom<String> for Style {
     }
 }
 
-/// The SGR parameters of one foreground color.
-fn parse_color(word: &str) -> Option<Vec<u8>> {
-    let (base, name) = match word.strip_prefix("bright_") {
-        Some(name) => (90, name),
-        None => (30, word),
+/// One color, as the config file writes it.
+fn parse_color(word: &str) -> Option<Color> {
+    let (offset, name) = match word.strip_prefix("bright_") {
+        Some(name) => (8, name),
+        None => (0, word),
     };
     if let Some(index) = COLORS.iter().position(|color| *color == name) {
-        return Some(vec![base + index as u8]);
+        return Some(Color::Basic(offset + index as u8));
     }
     if let Some(hex) = word.strip_prefix('#') {
         if hex.len() != 6 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
             return None;
         }
         let channel = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).ok();
-        return Some(vec![38, 2, channel(0)?, channel(2)?, channel(4)?]);
+        return Some(Color::Rgb(channel(0)?, channel(2)?, channel(4)?));
     }
     // Digits only, so "+5" isn't read as 5.
     if !word.bytes().all(|b| b.is_ascii_digit()) {
         return None;
     }
-    let index: u8 = word.parse().ok()?;
-    Some(vec![38, 5, index])
+    word.parse().ok().map(Color::Indexed)
 }
 
 #[cfg(test)]
@@ -154,5 +219,28 @@ mod tests {
     fn rejects_two_colors() {
         let error = "red blue".parse::<Style>().unwrap_err();
         assert_eq!(error, r#"style "red blue" has more than one color"#);
+        let error = "usage red".parse::<Style>().unwrap_err();
+        assert_eq!(error, r#"style "usage red" has more than one color"#);
+    }
+
+    #[test]
+    fn takes_the_usage_style_where_it_says_usage() {
+        let style = |text: &str| text.parse::<Style>().unwrap();
+        let usage = style("bold red");
+        assert!(style("Usage").uses_usage());
+        assert_eq!(
+            style("italic usage").resolve(&usage),
+            style("italic bold red")
+        );
+        assert_eq!(style("usage").resolve(&style("")), style(""));
+        assert_eq!(style("dim cyan").resolve(&usage), style("dim cyan"));
+        assert_eq!(
+            style("italic usage").resolve(&usage).escape().as_deref(),
+            Some("\x1b[3;1;31m")
+        );
+        assert_eq!(
+            style("bold underline").attribute_flags(),
+            [true, false, false, true]
+        );
     }
 }

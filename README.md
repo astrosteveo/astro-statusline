@@ -93,6 +93,10 @@ padding = 0
 model = "cyan"
 directory = "blue"
 branch = "magenta"
+# usage takes the usage color below, by how much is used.
+context = "usage"
+five_hour = "usage"
+seven_day = "usage"
 cost = "dim"
 separator = "dim"
 # Context and rate-limit percentages: low, medium, and high, as [thresholds] sets them.
@@ -152,8 +156,22 @@ A style is words separated by spaces, each one of these:
 For example, `model = "bold #ff8700"`. An empty string, `""`, draws plain text.
 
 The context and rate-limit segments take `usage_low`, `usage_medium`, or `usage_high` by how much is
-used. `[thresholds]` sets where each one changes, in whole percents, for each segment on its own:
-`context = [60, 85]` draws the context in the low color below 60%, medium from 60%, and high from 85%.
+used: their styles default to `usage`, which stands for that usage style. `usage` works in those three
+segments' styles and templates only. `[thresholds]` sets where the usage style changes, in whole
+percents, for each segment on its own: `context = [60, 85]` draws the context in the low color below
+60%, medium from 60%, and high from 85%.
+
+A placeholder can have its own style, written after a colon: `{percent:bold}`. Its value is drawn in
+that style, and the rest of the template in the segment's. For a dim label and a bold percentage in
+the usage color:
+
+```toml
+[colors]
+context = "dim"
+
+[format]
+context = "ctx {percent:bold usage}"
+```
 
 ### Formats
 

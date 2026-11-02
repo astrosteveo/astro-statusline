@@ -9,7 +9,6 @@ use toml_edit::{Array, DocumentMut, Item, Key, Table, TableLike, Value};
 use crate::config::{self, Config, DEFAULTS};
 use crate::segments::Kind;
 use crate::style::Style;
-use crate::template::Template;
 
 static DEFAULT_DOC: LazyLock<DocumentMut> =
     LazyLock::new(|| DEFAULTS.parse().expect("the defaults parse"));
@@ -94,8 +93,13 @@ impl Field {
                     Value::from(number)
                 });
             }
-            Field::Template(kind) => Template::parse(text, kind.placeholders()).map(drop),
-            Field::Style(_) => text.parse::<Style>().map(drop),
+            Field::Template(kind) => kind.parse_template(text).map(drop),
+            Field::Style(key) => text.parse::<Style>().and_then(|style| {
+                match Kind::from_name(key).is_some_and(Kind::has_usage) {
+                    true => Ok(()),
+                    false => config::check_plain_style(&style),
+                }
+            }),
             Field::Separator(_) => Ok(()),
             Field::BarFull | Field::BarEmpty | Field::BarMarker => config::check_cell(text),
             Field::GraphChars => config::check_graph_chars(text).map(drop),

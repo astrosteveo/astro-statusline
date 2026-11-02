@@ -15,7 +15,7 @@ use super::doc::Field;
 use super::preview::{self, SCENARIOS};
 use super::{
     App, Confirm, Focus, GRID_COLUMNS, LayoutItem, Mode, Picker, SECTIONS, Section, claude,
-    layout_items, own_style,
+    layout_items,
 };
 use crate::config::Config;
 use crate::segments::Kind;
@@ -80,7 +80,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
     draw_detail(frame, app, right);
     draw_footer(frame, app, footer);
     match &app.mode {
-        Mode::Style(picker) => draw_picker(frame, middle, picker),
+        Mode::Style(picker) => draw_picker(frame, app, middle, picker),
         Mode::Confirm(confirm) => draw_confirm(frame, app, area, confirm),
         Mode::Normal | Mode::Edit(_) => {}
     }
@@ -226,6 +226,12 @@ fn draw_detail(frame: &mut Frame, app: &App, area: Rect) {
     }
 }
 
+/// The usage style a sample of a `usage` style is drawn in: the medium one, from the config being
+/// edited.
+fn usage_sample(app: &App) -> crate::style::Style {
+    app.preview_config().unwrap_or_default().colors.usage_medium
+}
+
 /// The field's label, in a config with `rows` rows.
 fn field_label(field: Field, rows: usize) -> String {
     match field {
@@ -250,7 +256,8 @@ fn field_label(field: Field, rows: usize) -> String {
 
 /// A field's value as shown: text in quotes, so spaces at its ends show, and a style with a
 /// sample of itself.
-fn value_spans(field: Field, text: &str) -> Vec<Span<'static>> {
+/// A field's value as shown, with a style's sample drawn in `usage` where it says usage.
+fn value_spans(field: Field, text: &str, usage: &crate::style::Style) -> Vec<Span<'static>> {
     match field {
         Field::BarWidth
         | Field::GraphWidth
@@ -267,6 +274,7 @@ fn value_spans(field: Field, text: &str) -> Vec<Span<'static>> {
             })];
             if let Ok(style) = text.parse::<crate::style::Style>() {
                 spans.push(Span::raw("   "));
+                let style = style.resolve(usage);
                 let sample = format!("{}Sample\x1b[0m", style.escape().unwrap_or_default());
                 spans.extend(preview::to_line(&sample).spans);
             }
@@ -312,7 +320,7 @@ fn draw_fields(frame: &mut Frame, app: &App, area: Rect, section: Section, focus
                 if field.optional() && !shown.set {
                     spans.push(Span::styled("always", dim()));
                 } else {
-                    spans.extend(value_spans(field, &shown.text));
+                    spans.extend(value_spans(field, &shown.text, &usage_sample(app)));
                 }
                 if !shown.set && !field.optional() {
                     spans.push(Span::styled("  default", dim()));
@@ -330,10 +338,10 @@ fn draw_fields(frame: &mut Frame, app: &App, area: Rect, section: Section, focus
 
     lines.push(Line::raw(""));
     if let Section::Segment(kind) = section {
-        if own_style(kind).is_none() {
+        if kind.has_usage() {
             lines.push(Line::styled(
-                " Drawn in the usage colors, from Usage colors. Medium, high: the percentages \
-                 where the color turns medium, then high.",
+                " Style usage takes the usage color, from Usage colors. Medium, high: the \
+                 percentages where the color turns medium, then high.",
                 dim(),
             ));
         }
@@ -589,6 +597,9 @@ fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
             (None, Field::Template(_)) => "enter keep  esc cancel  tab insert a placeholder",
             (None, _) => "enter keep  esc cancel",
         },
+        (Mode::Style(picker), ..) if picker.allows_usage() => {
+            "←↑↓→ color  b d i u attributes  U usage  x no color  t type it  enter keep  esc cancel"
+        }
         (Mode::Style(_), ..) => {
             "←↑↓→ color  b d i u attributes  x no color  t type it  enter keep  esc cancel"
         }
@@ -639,13 +650,13 @@ fn centered(area: Rect, width: u16, height: u16) -> Rect {
 }
 
 /// Draws the style picker over `area`, which leaves the preview above it in view.
-fn draw_picker(frame: &mut Frame, area: Rect, picker: &Picker) {
+fn draw_picker(frame: &mut Frame, app: &App, area: Rect, picker: &Picker) {
     let popup = centered(area, 70, 13);
     let text = picker.text();
     let mut lines = vec![Line::from(
         [Span::styled(" Style  ", bold())]
             .into_iter()
-            .chain(value_spans(picker.field, &text))
+            .chain(value_spans(picker.field, &text, &usage_sample(app)))
             .collect::<Vec<_>>(),
     )];
     let attributes: Vec<Span> = ["bold", "dim", "italic", "underline"]

@@ -5,7 +5,10 @@
 //! `{{{x}}}` draws `{`, then `x`, then `}`. In a run of brackets, pairs are literal brackets and an
 //! odd one out belongs to the group: the first `[` of a run opens it and the last `]` of a run
 //! closes it, so `[[[{x}]]]` is a group that draws `[x]`. Values are inserted as plain text and
-//! never parsed again.
+//! never parsed again. A placeholder can name a style after a colon, as in `{percent:bold}`, to
+//! draw its value in that style instead of the segment's.
+
+use crate::style::Style;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Template(Vec<Part>);
@@ -19,12 +22,18 @@ enum Part {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Piece {
     Text(String),
-    Value(String),
+    /// A placeholder, and the style written after its name, as in `{percent:bold}`.
+    Value(String, Option<Style>),
 }
 
+/// Rendered text in order, each piece with the style of the placeholder it came from, if that
+/// placeholder has one.
+pub type Pieces<'t> = Vec<(String, Option<&'t Style>)>;
+
 impl Template {
-    /// Parses `text`, allowing only the placeholders in `allowed`.
-    pub fn parse(text: &str, allowed: &[&str]) -> Result<Self, String> {
+    /// Parses `text`, allowing only the placeholders in `allowed`, and the `usage` color in their
+    /// styles only when `usage` is set.
+    pub fn parse(text: &str, allowed: &[&str], usage: bool) -> Result<Self, String> {
         let chars: Vec<char> = text.chars().collect();
         let mut parts = Vec::new();
         let mut group: Option<Vec<Piece>> = None;
@@ -42,11 +51,22 @@ impl Template {
                         if i + name_len == chars.len() {
                             return Err(format!("{text:?} has a {{ with no }}"));
                         }
-                        let name: String = chars[i..i + name_len].iter().collect();
+                        let inside: String = chars[i..i + name_len].iter().collect();
                         i += name_len + 1;
-                        check_name(&name, allowed)?;
+                        let (name, style) = match inside.split_once(':') {
+                            Some((name, style)) => (name, Some(style)),
+                            None => (inside.as_str(), None),
+                        };
+                        check_name(name, allowed)?;
+                        let style = style
+                            .map(|style| parse_style(text, &inside, style, usage))
+                            .transpose()?;
                         flush(&mut literal, &mut parts, &mut group);
-                        push(&mut parts, &mut group, Piece::Value(name));
+                        push(
+                            &mut parts,
+                            &mut group,
+                            Piece::Value(name.to_string(), style),
+                        );
                     }
                 }
                 '}' => {
@@ -80,7 +100,7 @@ impl Template {
                         }
                         flush(&mut literal, &mut parts, &mut group);
                         let inner = group.take().unwrap_or_default();
-                        if !inner.iter().any(|piece| matches!(piece, Piece::Value(_))) {
+                        if !inner.iter().any(|piece| matches!(piece, Piece::Value(..))) {
                             return Err(format!(
                                 "{text:?} has a [ ] group with no placeholder in it; write [[ and \
                                  ]] for literal brackets"
@@ -104,7 +124,7 @@ impl Template {
 
     /// Whether the template has a `{name}` placeholder anywhere.
     pub fn uses(&self, name: &str) -> bool {
-        let is = |piece: &Piece| matches!(piece, Piece::Value(value) if value == name);
+        let is = |piece: &Piece| matches!(piece, Piece::Value(value, _) if value == name);
         self.0.iter().any(|part| match part {
             Part::Piece(piece) => is(piece),
             Part::Group(pieces) => pieces.iter().any(is),
@@ -113,17 +133,15 @@ impl Template {
 
     /// Fills the template with `value(name)` for each placeholder. `None` when a placeholder
     /// outside any group has no value. An empty value counts as none.
-    pub fn render(&self, value: impl Fn(&str) -> Option<String>) -> Option<String> {
-        let mut out = String::new();
+    pub fn render(&self, value: impl Fn(&str) -> Option<String>) -> Option<Pieces<'_>> {
+        let mut out = Vec::new();
         for part in &self.0 {
             match part {
                 Part::Piece(piece) => {
-                    out.push_str(&render_pieces(std::slice::from_ref(piece), &value)?)
+                    out.extend(render_pieces(std::slice::from_ref(piece), &value)?)
                 }
                 Part::Group(pieces) => {
-                    if let Some(text) = render_pieces(pieces, &value) {
-                        out.push_str(&text);
-                    }
+                    out.extend(render_pieces(pieces, &value).unwrap_or_default())
                 }
             }
         }
@@ -132,15 +150,33 @@ impl Template {
 }
 
 /// Renders `pieces`, or `None` if any placeholder among them has no value.
-fn render_pieces(pieces: &[Piece], value: &impl Fn(&str) -> Option<String>) -> Option<String> {
-    let mut out = String::new();
-    for piece in pieces {
-        match piece {
-            Piece::Text(text) => out.push_str(text),
-            Piece::Value(name) => out.push_str(&value(name).filter(|v| !v.is_empty())?),
-        }
+fn render_pieces<'t>(
+    pieces: &'t [Piece],
+    value: &impl Fn(&str) -> Option<String>,
+) -> Option<Pieces<'t>> {
+    pieces
+        .iter()
+        .map(|piece| match piece {
+            Piece::Text(text) => Some((text.clone(), None)),
+            Piece::Value(name, style) => {
+                let text = value(name).filter(|v| !v.is_empty())?;
+                Some((text, style.as_ref()))
+            }
+        })
+        .collect()
+}
+
+/// The style written after a placeholder's name, as in `{percent:bold}`.
+fn parse_style(text: &str, inside: &str, style: &str, usage: bool) -> Result<Style, String> {
+    let parsed: Style = style
+        .parse()
+        .map_err(|error| format!("{text:?} has {{{inside}}}: {error}"))?;
+    if parsed.uses_usage() && !usage {
+        return Err(format!(
+            "{text:?} has {{{inside}}}: usage is only for the context and rate-limit templates"
+        ));
     }
-    Some(out)
+    Ok(parsed)
 }
 
 fn check_name(name: &str, allowed: &[&str]) -> Result<(), String> {
@@ -175,16 +211,56 @@ mod tests {
     const ALLOWED: &[&str] = &["x", "eta", "resets_in"];
 
     fn render(template: &str, values: &[(&str, &str)]) -> Option<String> {
-        Template::parse(template, ALLOWED).unwrap().render(|name| {
+        let template = Template::parse(template, ALLOWED, true).unwrap();
+        let pieces = template.render(|name| {
             values
                 .iter()
                 .find(|(key, _)| *key == name)
                 .map(|(_, value)| value.to_string())
-        })
+        })?;
+        Some(pieces.into_iter().map(|(text, _)| text).collect())
+    }
+
+    #[test]
+    fn styles_a_placeholder_written_with_a_style() {
+        let template =
+            Template::parse("ctx {x:bold usage}[ {eta:dim}] {resets_in}", ALLOWED, true).unwrap();
+        let pieces = template.render(|name| Some(format!("<{name}>"))).unwrap();
+        let style = |text: &str| text.parse::<Style>().unwrap();
+        let shown: Vec<(&str, Option<Style>)> = pieces
+            .iter()
+            .map(|(text, style)| (text.as_str(), style.cloned()))
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                ("ctx ", None),
+                ("<x>", Some(style("bold usage"))),
+                (" ", None),
+                ("<eta>", Some(style("dim"))),
+                (" ", None),
+                ("<resets_in>", None),
+            ]
+        );
+        assert!(template.uses("x") && template.uses("eta"));
+        assert_eq!(render("{x:}", &[("x", "a")]).as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn rejects_a_style_it_cannot_draw() {
+        assert!(
+            error("{x:purple}").contains("\"{x:purple}\" has {x:purple}: unknown style \"purple\"")
+        );
+        assert!(error("{y:bold}").contains("unknown placeholder {y}"));
+        let error = Template::parse("{x:usage}", ALLOWED, false).unwrap_err();
+        assert!(
+            error.contains("usage is only for the context and rate-limit templates"),
+            "{error}"
+        );
     }
 
     fn error(template: &str) -> String {
-        Template::parse(template, ALLOWED).unwrap_err()
+        Template::parse(template, ALLOWED, true).unwrap_err()
     }
 
     #[test]
@@ -241,7 +317,7 @@ mod tests {
 
     #[test]
     fn knows_which_placeholders_it_uses() {
-        let template = Template::parse("{x}[ {eta}] {{resets_in}}", ALLOWED).unwrap();
+        let template = Template::parse("{x}[ {eta}] {{resets_in}}", ALLOWED, true).unwrap();
         assert!(template.uses("x") && template.uses("eta"));
         assert!(!template.uses("resets_in"));
     }

@@ -10,7 +10,7 @@ use crate::predict;
 use crate::render::{self, Segment};
 use crate::session::{RateLimit, Session};
 use crate::style::Style;
-use crate::template::Template;
+use crate::template::{Pieces, Template};
 use crate::units;
 
 /// A segment the config can name. Each keeps its priority wherever it sits in the line, so a
@@ -55,6 +55,16 @@ impl Kind {
     /// The segment the config file calls `name`.
     pub fn from_name(name: &str) -> Option<Kind> {
         Kind::ALL.into_iter().find(|kind| kind.name() == name)
+    }
+
+    /// Whether the segment shows a percentage, and so has usage colors.
+    pub fn has_usage(self) -> bool {
+        matches!(self, Kind::Context | Kind::FiveHour | Kind::SevenDay)
+    }
+
+    /// Parses `text` as this segment's format template.
+    pub fn parse_template(self, text: &str) -> Result<Template, String> {
+        Template::parse(text, self.placeholders(), self.has_usage())
     }
 
     /// The placeholders this segment's format template can use. `segment` fills each one.
@@ -139,14 +149,14 @@ pub fn row(env: &Env, kinds: &[Kind]) -> Vec<Segment> {
 fn segment(kind: Kind, env: &Env) -> Option<Segment> {
     let (session, config) = (env.session, env.config);
     let (colors, format) = (&config.colors, &config.format);
-    let (text, style) = match kind {
+    let (text, usage) = match kind {
         Kind::Model => {
             let name = session.model.as_ref()?.display_name.as_deref()?;
             let text = format.model.render(|key| match key {
                 "name" => Some(name.to_string()),
                 _ => None,
             });
-            (text?, &colors.model)
+            (text?, None)
         }
         Kind::Directory => {
             let name = session.current_dir()?.file_name()?.to_string_lossy();
@@ -154,7 +164,7 @@ fn segment(kind: Kind, env: &Env) -> Option<Segment> {
                 "name" => Some(name.to_string()),
                 _ => None,
             });
-            (text?, &colors.directory)
+            (text?, None)
         }
         Kind::Branch => {
             let branch = env.branch?;
@@ -162,7 +172,7 @@ fn segment(kind: Kind, env: &Env) -> Option<Segment> {
                 "branch" => Some(branch.to_string()),
                 _ => None,
             });
-            (text?, &colors.branch)
+            (text?, None)
         }
         Kind::Context => {
             let window = session.context_window.as_ref()?;
@@ -182,7 +192,10 @@ fn segment(kind: Kind, env: &Env) -> Option<Segment> {
                 "size" => window.context_window_size.map(units::tokens),
                 _ => None,
             });
-            (text?, usage_style(used, colors, config.thresholds.context))
+            (
+                text?,
+                Some(usage_style(used, colors, config.thresholds.context)),
+            )
         }
         Kind::FiveHour => {
             let limit = session.rate_limits.as_ref()?.five_hour.as_ref()?;
@@ -221,10 +234,16 @@ fn segment(kind: Kind, env: &Env) -> Option<Segment> {
                 "graph" => graph(env, |s| s.cost, Scale::Increase),
                 _ => None,
             });
-            (text?, &colors.cost)
+            (text?, None)
         }
     };
-    Some(Segment::new(text, style.clone(), config.priority(kind)))
+    // `usage` in a style becomes the usage color of the percentage drawn.
+    let resolve = |style: &Style| usage.map_or_else(|| style.clone(), |usage| style.resolve(usage));
+    let base = resolve(colors.get(kind));
+    let pieces = text
+        .into_iter()
+        .map(|(text, style)| (text, style.map_or_else(|| base.clone(), resolve)));
+    Some(Segment::from_pieces(pieces, config.priority(kind)))
 }
 
 /// The rate limit `kind` over a `window` seconds long, whose history `value` picks out of each
@@ -233,10 +252,10 @@ fn rate_limit<'a>(
     limit: &RateLimit,
     window: f64,
     value: fn(&Sample) -> Option<f64>,
-    template: &Template,
+    template: &'a Template,
     kind: Kind,
     env: &Env<'a>,
-) -> Option<(String, &'a Style)> {
+) -> Option<(Pieces<'a>, Option<&'a Style>)> {
     let config = env.config;
     let used = limit.used_percentage?;
     if !config.show_from.shows(kind, used) {
@@ -264,7 +283,7 @@ fn rate_limit<'a>(
         "delta" => target.map(|target| delta(used, target)),
         _ => None,
     })?;
-    Some((text, usage_style(used, &env.config.colors, thresholds)))
+    Some((text, Some(usage_style(used, &config.colors, thresholds))))
 }
 
 /// A graph of `value` across the session's history, skipping samples without it.
@@ -361,7 +380,7 @@ mod tests {
     }
 
     fn texts(input: &str) -> Vec<String> {
-        segments(input).into_iter().map(|s| s.text).collect()
+        segments(input).into_iter().map(|s| s.text()).collect()
     }
 
     fn style(text: &str) -> Style {
@@ -380,7 +399,7 @@ mod tests {
             Kind::SevenDay => &mut format.seven_day,
             Kind::Cost => &mut format.cost,
         };
-        *field = Template::parse(template, kind.placeholders()).unwrap();
+        *field = kind.parse_template(template).unwrap();
         Config {
             segments: Some(vec![kind]),
             format,
@@ -391,7 +410,7 @@ mod tests {
     fn text_with(kind: Kind, template: &str, input: &str) -> Option<String> {
         draw(input, &with_template(kind, template))
             .pop()
-            .map(|s| s.text)
+            .map(|s| s.text())
     }
 
     #[test]
@@ -425,10 +444,10 @@ mod tests {
         };
         let segments = draw(FULL, &config);
 
-        let texts: Vec<&str> = segments.iter().map(|s| s.text.as_str()).collect();
+        let texts: Vec<String> = segments.iter().map(|s| s.text()).collect();
         assert_eq!(texts, ["$0.01", "ctx 8%", "Opus"]);
-        assert_eq!(segments[1].style, style("bright_green"));
-        assert_eq!(segments[2].style, style("bold #ff8700"));
+        assert_eq!(segments[1].style(), style("bright_green"));
+        assert_eq!(segments[2].style(), style("bold #ff8700"));
         // Priority belongs to the segment, not its position.
         assert_eq!(segments[1].priority, 100);
     }
@@ -537,7 +556,7 @@ mod tests {
                 branch: None,
             })
             .pop()
-            .map(|s| s.text)
+            .map(|s| s.text())
         };
         assert_eq!(draw(Some(NOW)).as_deref(), Some("90% 1h 112% 26m 80% +10%"));
         assert_eq!(draw(None).as_deref(), Some("90%"));
@@ -579,7 +598,7 @@ mod tests {
             history: &history,
             branch: None,
         });
-        assert_eq!(segments[0].text, "80% ▁▇");
+        assert_eq!(segments[0].text(), "80% ▁▇");
     }
 
     #[test]
@@ -600,7 +619,7 @@ mod tests {
                 branch: None,
             })
             .remove(0)
-            .text
+            .text()
         };
         assert_eq!(
             draw(&[at(NOW - 600, 40.0), at(NOW, 60.0)]),
@@ -647,7 +666,7 @@ mod tests {
                 r#"{{"context_window": {{"used_percentage": {used}}}}}"#
             ))
             .remove(0)
-            .style
+            .style()
         };
         assert_eq!(color("0"), style("green"));
         assert_eq!(color("49.9"), style("green"));
@@ -658,13 +677,46 @@ mod tests {
     }
 
     #[test]
+    fn draws_a_placeholder_in_its_own_style() {
+        let config = crate::config::parse(
+            r#"
+            segments = ["model", "context", "five_hour"]
+            colors.context = "dim"
+            format.model = "{name:bold}!"
+            format.context = "ctx {percent:bold usage}"
+            format.five_hour = "5h {percent:italic}"
+            "#,
+        )
+        .unwrap();
+        let pieces: Vec<Vec<(String, Style)>> = draw(FULL, &config)
+            .into_iter()
+            .map(|s| s.pieces.into_iter().map(|p| (p.text, p.style)).collect())
+            .collect();
+        assert_eq!(
+            pieces,
+            [
+                vec![("Opus".into(), style("bold")), ("!".into(), style("cyan"))],
+                vec![
+                    ("ctx ".into(), style("dim")),
+                    ("8%".into(), style("bold green"))
+                ],
+                // The rate limit's own style is `usage`, so its label is in the usage color.
+                vec![
+                    ("5h ".into(), style("green")),
+                    ("24%".into(), style("italic"))
+                ],
+            ]
+        );
+    }
+
+    #[test]
     fn shows_segments_only_from_their_value_up() {
         let config = crate::config::parse(
             "show_from.context = 10\nshow_from.five_hour = 24\nshow_from.seven_day = 41.3\nshow_from.cost = 0.02",
         )
         .unwrap();
         let shown = |input: &str| -> Vec<String> {
-            draw(input, &config).into_iter().map(|s| s.text).collect()
+            draw(input, &config).into_iter().map(|s| s.text()).collect()
         };
         // FULL has context 8%, 5-hour 23.5% (24% rounded), 7-day 41.2%, and $0.01.
         assert_eq!(shown(FULL), ["Opus", "proj"]);
@@ -699,7 +751,7 @@ mod tests {
         let colors = |context, five_hour, seven_day| -> Vec<Style> {
             draw(&input(context, five_hour, seven_day), &config)
                 .into_iter()
-                .map(|s| s.style)
+                .map(|s| s.style())
                 .collect()
         };
         let (green, yellow, red) = (style("green"), style("yellow"), style("red"));
