@@ -238,6 +238,7 @@ fn field_label(field: Field, rows: usize) -> String {
         Field::Separator(_) if rows <= 1 => "Text",
         Field::Separator(row) => return format!("Row {}", row + 1),
         Field::Padding => "Padding",
+        Field::ShowFrom(_) => "Show from",
         Field::BarWidth | Field::GraphWidth => "Width",
         Field::BarFull => "Full cell",
         Field::BarEmpty => "Empty cell",
@@ -251,7 +252,11 @@ fn field_label(field: Field, rows: usize) -> String {
 /// sample of itself.
 fn value_spans(field: Field, text: &str) -> Vec<Span<'static>> {
     match field {
-        Field::BarWidth | Field::GraphWidth | Field::Padding | Field::Thresholds(_) => {
+        Field::BarWidth
+        | Field::GraphWidth
+        | Field::Padding
+        | Field::Thresholds(_)
+        | Field::ShowFrom(_) => {
             vec![Span::raw(text.to_string())]
         }
         Field::Style(_) => {
@@ -294,7 +299,7 @@ fn draw_fields(frame: &mut Frame, app: &App, area: Rect, section: Section, focus
                     Span::raw(" "),
                     Span::styled(format!("\"{text}\""), Style::default().fg(Color::Cyan)),
                 ]));
-                if let Err(error) = field.value(&text) {
+                if let Err(error) = app.doc.clone().put(field, &text) {
                     lines.push(Line::styled(
                         format!("{:LABEL_WIDTH$}   {error}", ""),
                         red(),
@@ -304,8 +309,12 @@ fn draw_fields(frame: &mut Frame, app: &App, area: Rect, section: Section, focus
             _ => {
                 let shown = app.doc.get(field);
                 let mut spans = vec![label, Span::raw(" ")];
-                spans.extend(value_spans(field, &shown.text));
-                if !shown.set {
+                if field.optional() && !shown.set {
+                    spans.push(Span::styled("always", dim()));
+                } else {
+                    spans.extend(value_spans(field, &shown.text));
+                }
+                if !shown.set && !field.optional() {
                     spans.push(Span::styled("  default", dim()));
                 }
                 lines.push(Line::from(spans));
@@ -325,6 +334,20 @@ fn draw_fields(frame: &mut Frame, app: &App, area: Rect, section: Section, focus
             lines.push(Line::styled(
                 " Drawn in the usage colors, from Usage colors. Medium, high: the percentages \
                  where the color turns medium, then high.",
+                dim(),
+            ));
+        }
+        let unit = match kind {
+            Kind::Cost => Some("dollars"),
+            Kind::Context | Kind::FiveHour | Kind::SevenDay => Some("percent"),
+            Kind::Model | Kind::Directory | Kind::Branch => None,
+        };
+        if let Some(unit) = unit {
+            lines.push(Line::styled(
+                format!(
+                    " Show from: the segment shows only from this many {unit} up. Leave it \
+                     empty to always show it."
+                ),
                 dim(),
             ));
         }

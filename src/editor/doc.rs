@@ -31,6 +31,8 @@ pub enum Field {
     GraphChars,
     /// A percentage segment's `[thresholds]`.
     Thresholds(Kind),
+    /// A segment's `[show_from]`, which has no default.
+    ShowFrom(Kind),
 }
 
 /// The TOML type a field is written as.
@@ -38,6 +40,8 @@ pub enum Field {
 enum Shape {
     Text,
     Integer,
+    /// An integer or a float.
+    Number,
     List,
 }
 
@@ -56,20 +60,40 @@ impl Field {
             Field::GraphWidth => ("graph", "width"),
             Field::GraphChars => ("graph", "chars"),
             Field::Thresholds(kind) => ("thresholds", kind.name()),
+            Field::ShowFrom(kind) => ("show_from", kind.name()),
         }
     }
 
     fn shape(self) -> Shape {
         match self {
             Field::BarWidth | Field::GraphWidth | Field::Padding => Shape::Integer,
+            Field::ShowFrom(_) => Shape::Number,
             Field::Thresholds(_) => Shape::List,
             _ => Shape::Text,
         }
     }
 
+    /// Whether the field has no default, so that leaving it empty takes it out of the file.
+    pub fn optional(self) -> bool {
+        matches!(self, Field::ShowFrom(_))
+    }
+
     /// Checks `text` as the field's value, giving the TOML value to write or what is wrong.
     pub fn value(self, text: &str) -> Result<Value, String> {
         match self {
+            Field::ShowFrom(_) => {
+                let number: f64 = text
+                    .trim()
+                    .parse()
+                    .map_err(|_| format!("{text:?} isn't a number"))?;
+                let number = config::check_show_from(number)?;
+                // A whole number is written as one, as a person would.
+                return Ok(if number.fract() == 0.0 && number < 1e15 {
+                    Value::from(number as i64)
+                } else {
+                    Value::from(number)
+                });
+            }
             Field::Template(kind) => Template::parse(text, kind.placeholders()).map(drop),
             Field::Style(_) => text.parse::<Style>().map(drop),
             Field::Separator(_) => Ok(()),
@@ -155,9 +179,10 @@ impl Doc {
             };
         }
         let Some(item) = lookup(&self.0, table, key) else {
-            let default = lookup(&DEFAULT_DOC, table, key).expect("every field has a default");
+            // An optional field's default is to be left out.
+            let default = lookup(&DEFAULT_DOC, table, key).map(text_of);
             return Shown {
-                text: text_of(default),
+                text: default.unwrap_or_default(),
                 set: false,
                 error: None,
             };
@@ -165,7 +190,14 @@ impl Doc {
         let text = text_of(item);
         let error = match (field.shape(), item) {
             (Shape::Integer, item) if item.is_integer() => field.value(&text).err(),
-            (Shape::Integer, _) => Some(format!("{text} isn't a number; write it without quotes")),
+            (Shape::Integer | Shape::Number, _) if item.is_str() => {
+                Some(format!("{text} isn't a number; write it without quotes"))
+            }
+            (Shape::Integer, _) => Some(format!("{text} isn't a whole number")),
+            (Shape::Number, item) if item.is_integer() || item.is_float() => {
+                field.value(&text).err()
+            }
+            (Shape::Number, _) => Some(format!("{text} isn't a number")),
             (Shape::List, item) if item.is_array() => field.value(&text).err(),
             (Shape::List, _) => Some(format!("{text} isn't a list; write it as [50, 80]")),
             (Shape::Text, item) if item.is_str() => field.value(&text).err(),
@@ -176,6 +208,17 @@ impl Doc {
             set: true,
             error,
         }
+    }
+
+    /// Sets the field from the text typed into it, or says what is wrong with the text. An optional
+    /// field left empty is taken out.
+    pub fn put(&mut self, field: Field, text: &str) -> Result<(), String> {
+        if field.optional() && text.trim().is_empty() {
+            self.reset(field);
+        } else {
+            self.set(field, field.value(text)?);
+        }
+        Ok(())
     }
 
     /// Sets the field, keeping any comment after the value it replaces.
@@ -603,6 +646,34 @@ mod tests {
 
         let doc = Doc::parse("format.separator = [1]").unwrap();
         assert!(doc.get(Field::Separator(0)).error.is_some());
+    }
+
+    #[test]
+    fn reads_and_writes_show_from_which_has_no_default() {
+        let mut doc = doc("[show_from]\ncost = 1.5\nseven_day = \"50\"\n");
+        let field = Field::ShowFrom(Kind::Context);
+        assert_eq!(
+            doc.get(field),
+            Shown {
+                text: String::new(),
+                set: false,
+                error: None
+            }
+        );
+        assert_eq!(doc.get(Field::ShowFrom(Kind::Cost)).text, "1.5");
+        let error = doc.get(Field::ShowFrom(Kind::SevenDay)).error.unwrap();
+        assert!(error.contains("without quotes"), "{error}");
+
+        doc.set(field, field.value("50").unwrap());
+        doc.set(Field::ShowFrom(Kind::Cost), field.value(" 0.25 ").unwrap());
+        assert_eq!(
+            doc.text(),
+            "[show_from]\ncost = 0.25\nseven_day = \"50\"\ncontext = 50\n"
+        );
+        for text in ["-1", "", "lots", "inf"] {
+            assert!(field.value(text).is_err(), "{text}");
+        }
+        assert!(field.optional() && !Field::Padding.optional());
     }
 
     #[test]

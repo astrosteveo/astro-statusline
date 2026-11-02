@@ -106,6 +106,10 @@ context = [50, 80]
 five_hour = [50, 80]
 seven_day = [50, 80]
 
+# Show a segment only from this value up: a percent for context, five_hour, and seven_day, and
+# dollars for cost, such as seven_day = 50 or cost = 1.0. A segment not named here always shows.
+[show_from]
+
 [format]
 # Or a list, one for each row, such as [" │ ", " · "]. Rows past its end take the last.
 separator = " │ "
@@ -188,6 +192,10 @@ A segment still needs the data it's about: the context segment shows only with a
 the cost segment only with a cost, and so on, whatever the template says. A value outside brackets
 that's missing hides its whole segment. To write a literal brace or bracket, double it: `{{`, `}}`,
 `[[`, `]]`.
+
+`[show_from]` hides a segment until its value reaches a number: `seven_day = 50` shows the 7-day
+limit from 50% used, and `cost = 1.0` shows the cost from $1. It compares the exact value, before
+rounding, so `seven_day = 24` still hides 23.5%, which shows as `24%`.
 
 For example, two rows with bars, graphs, and predictions:
 

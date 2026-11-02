@@ -117,6 +117,9 @@ impl Section {
                 if Thresholds::default().get(kind).is_some() {
                     fields.push(Field::Thresholds(kind));
                 }
+                if !matches!(kind, Kind::Model | Kind::Directory | Kind::Branch) {
+                    fields.push(Field::ShowFrom(kind));
+                }
                 fields
             }
             Section::Separator => {
@@ -458,9 +461,8 @@ impl App {
         let mut doc = self.doc.clone();
         match &self.mode {
             Mode::Edit(edit) => {
-                if let Ok(value) = edit.field.value(&edit.input.text()) {
-                    doc.set(edit.field, value);
-                }
+                // A mistake leaves the value as it was.
+                let _ = doc.put(edit.field, &edit.input.text());
             }
             Mode::Style(picker) => {
                 if let Ok(value) = picker.field.value(&picker.text()) {
@@ -621,8 +623,7 @@ impl App {
             (None, KeyCode::Tab) if !placeholders.is_empty() => edit.placeholders = Some(0),
             (None, KeyCode::Enter) => {
                 // A value with a mistake stays open, with the mistake shown under it.
-                if let Ok(value) = edit.field.value(&edit.input.text()) {
-                    self.doc.set(edit.field, value);
+                if self.doc.put(edit.field, &edit.input.text()).is_ok() {
                     return;
                 }
             }

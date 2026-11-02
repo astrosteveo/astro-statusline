@@ -282,6 +282,40 @@ fn scrolls_the_settings_list_to_the_chosen_section() {
 }
 
 #[test]
+fn shows_a_segment_only_from_a_value() {
+    let mut f = Fixture::new(None);
+    f.open(Section::Segment(Kind::Cost));
+    let screen = f.screen(110, 30);
+    assert!(screen.contains("Show from     always"), "{screen}");
+    assert!(screen.contains("$1.23"), "{screen}");
+    // Template, style, show from.
+    f.press(&[KeyCode::Down, KeyCode::Down, KeyCode::Enter])
+        .typing("x");
+    assert!(f.screen(110, 30).contains("\"x\" isn't a number"));
+    f.press(&[KeyCode::Backspace]).typing("1.5");
+    // The preview hides the $1.23 cost while the value is typed.
+    assert!(!f.screen(110, 30).contains("$1.23"));
+    f.press(&[KeyCode::Enter]);
+    assert_eq!(f.app.doc.text(), "[show_from]\ncost = 1.5\n");
+    // Emptied, it's taken out again.
+    f.press(&[
+        KeyCode::Enter,
+        KeyCode::Backspace,
+        KeyCode::Backspace,
+        KeyCode::Backspace,
+        KeyCode::Enter,
+    ]);
+    assert_eq!(f.app.doc.text(), "[show_from]\n");
+    assert!(f.screen(110, 30).contains("$1.23"));
+    // Model, directory and branch have no value to compare.
+    assert!(
+        !Section::Segment(Kind::Model)
+            .fields(1)
+            .contains(&Field::ShowFrom(Kind::Model))
+    );
+}
+
+#[test]
 fn edits_each_row_s_separator() {
     let mut f = Fixture::new(Some(
         "lines = [[\"model\", \"directory\"], [\"context\", \"cost\"]]\n",

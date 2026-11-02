@@ -167,6 +167,9 @@ fn segment(kind: Kind, env: &Env) -> Option<Segment> {
         Kind::Context => {
             let window = session.context_window.as_ref()?;
             let used = window.used_percentage?;
+            if !config.show_from.shows(kind, used) {
+                return None;
+            }
             let text = format.context.render(|key| match key {
                 "percent" => Some(percent(used)),
                 "bar" => graph::bar(used, None, &config.bar),
@@ -188,7 +191,7 @@ fn segment(kind: Kind, env: &Env) -> Option<Segment> {
                 predict::FIVE_HOURS,
                 |s| s.five_hour,
                 &format.five_hour,
-                config.thresholds.five_hour,
+                kind,
                 env,
             )?
         }
@@ -199,13 +202,16 @@ fn segment(kind: Kind, env: &Env) -> Option<Segment> {
                 predict::SEVEN_DAYS,
                 |s| s.seven_day,
                 &format.seven_day,
-                config.thresholds.seven_day,
+                kind,
                 env,
             )?
         }
         Kind::Cost => {
             let cost = session.cost.as_ref()?;
             let usd = cost.total_cost_usd?;
+            if !config.show_from.shows(kind, usd) {
+                return None;
+            }
             let text = format.cost.render(|key| match key {
                 "usd" => Some(format!("${usd:.2}")),
                 "rate" => cost
@@ -221,16 +227,22 @@ fn segment(kind: Kind, env: &Env) -> Option<Segment> {
     Some(Segment::new(text, style.clone(), config.priority(kind)))
 }
 
-/// A rate limit over a `window` seconds long, whose history `value` picks out of each sample.
+/// The rate limit `kind` over a `window` seconds long, whose history `value` picks out of each
+/// sample.
 fn rate_limit<'a>(
     limit: &RateLimit,
     window: f64,
     value: fn(&Sample) -> Option<f64>,
     template: &Template,
-    thresholds: [u8; 2],
+    kind: Kind,
     env: &Env<'a>,
 ) -> Option<(String, &'a Style)> {
+    let config = env.config;
     let used = limit.used_percentage?;
+    if !config.show_from.shows(kind, used) {
+        return None;
+    }
+    let thresholds = config.thresholds.get(kind)?;
     let now_and_reset = env.now.zip(limit.resets_at);
     let pace =
         now_and_reset.and_then(|(now, resets_at)| predict::pace(used, resets_at, now, window));
@@ -643,6 +655,28 @@ mod tests {
         assert_eq!(color("79.9"), style("yellow"));
         assert_eq!(color("80"), style("red"));
         assert_eq!(color("100"), style("red"));
+    }
+
+    #[test]
+    fn shows_segments_only_from_their_value_up() {
+        let config = crate::config::parse(
+            "show_from.context = 10\nshow_from.five_hour = 24\nshow_from.seven_day = 41.3\nshow_from.cost = 0.02",
+        )
+        .unwrap();
+        let shown = |input: &str| -> Vec<String> {
+            draw(input, &config).into_iter().map(|s| s.text).collect()
+        };
+        // FULL has context 8%, 5-hour 23.5% (24% rounded), 7-day 41.2%, and $0.01.
+        assert_eq!(shown(FULL), ["Opus", "proj"]);
+        let higher = FULL
+            .replace("\"used_percentage\": 8", "\"used_percentage\": 10")
+            .replace("23.5", "24")
+            .replace("41.2", "41.3")
+            .replace("0.01234", "0.02");
+        assert_eq!(
+            shown(&higher),
+            ["Opus", "proj", "ctx 10%", "5h 24%", "7d 41%", "$0.02"]
+        );
     }
 
     #[test]

@@ -47,6 +47,10 @@ context = [50, 80]
 five_hour = [50, 80]
 seven_day = [50, 80]
 
+# Show a segment only from this value up: a percent for context, five_hour, and seven_day, and
+# dollars for cost, such as seven_day = 50 or cost = 1.0. A segment not named here always shows.
+[show_from]
+
 [format]
 # Or a list, one for each row, such as [" │ ", " · "]. Rows past its end take the last.
 separator = " │ "
@@ -69,7 +73,7 @@ width = 8
 chars = "▁▂▃▄▅▆▇█"
 "##;
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
     /// One row of segments, left to right.
@@ -84,9 +88,54 @@ pub struct Config {
     pub padding: u16,
     pub colors: Colors,
     pub thresholds: Thresholds,
+    pub show_from: ShowFrom,
     pub format: Format,
     pub bar: Bar,
     pub graph: Graph,
+}
+
+/// The value from which a segment shows: a percent for the context and rate limits, dollars for
+/// the cost. A segment without one always shows.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ShowFrom {
+    #[serde(deserialize_with = "show_from")]
+    pub context: Option<f64>,
+    #[serde(deserialize_with = "show_from")]
+    pub five_hour: Option<f64>,
+    #[serde(deserialize_with = "show_from")]
+    pub seven_day: Option<f64>,
+    #[serde(deserialize_with = "show_from")]
+    pub cost: Option<f64>,
+}
+
+impl ShowFrom {
+    /// Whether `kind` shows at `value`.
+    pub fn shows(&self, kind: Kind, value: f64) -> bool {
+        let from = match kind {
+            Kind::Context => self.context,
+            Kind::FiveHour => self.five_hour,
+            Kind::SevenDay => self.seven_day,
+            Kind::Cost => self.cost,
+            Kind::Model | Kind::Directory | Kind::Branch => None,
+        };
+        from.is_none_or(|from| value >= from)
+    }
+}
+
+fn show_from<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<f64>, D::Error> {
+    check_show_from(f64::deserialize(deserializer)?)
+        .map(Some)
+        .map_err(de::Error::custom)
+}
+
+/// Checks a `[show_from]` value.
+pub fn check_show_from(value: f64) -> Result<f64, String> {
+    if value.is_finite() && value >= 0.0 {
+        Ok(value)
+    } else {
+        Err(format!("show_from {value} isn't a number from 0 up"))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -583,6 +632,19 @@ mod tests {
     }
 
     #[test]
+    fn shows_a_segment_from_its_value_up() {
+        let show_from = parse("show_from.seven_day = 50\nshow_from.cost = 1.5")
+            .unwrap()
+            .show_from;
+        assert!(!show_from.shows(Kind::SevenDay, 49.9));
+        assert!(show_from.shows(Kind::SevenDay, 50.0));
+        assert!(!show_from.shows(Kind::Cost, 1.49));
+        assert!(show_from.shows(Kind::Cost, 1.5));
+        assert!(show_from.shows(Kind::Context, 0.0));
+        assert!(show_from.shows(Kind::Model, 0.0));
+    }
+
+    #[test]
     fn reads_thresholds_per_segment() {
         let config = parse("thresholds.context = [60, 85]\nthresholds.seven_day = [0, 0]").unwrap();
         assert_eq!(config.thresholds.get(Kind::Context), Some([60, 85]));
@@ -713,6 +775,16 @@ mod tests {
             ),
             ("drop_order = [\"git\"]", "unknown variant `git`"),
             ("drop_order = \"cost\"", "invalid type"),
+            ("show_from.model = 1", "unknown field `model`"),
+            (
+                "show_from.cost = -1",
+                "show_from -1 isn't a number from 0 up",
+            ),
+            (
+                "show_from.cost = nan",
+                "show_from NaN isn't a number from 0 up",
+            ),
+            ("show_from.cost = \"1\"", "invalid type"),
             ("thresholds.model = [50, 80]", "unknown field `model`"),
             (
                 "thresholds.context = [90, 80]",
