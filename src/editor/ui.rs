@@ -637,11 +637,10 @@ fn draw_confirm(frame: &mut Frame, app: &App, area: Rect, confirm: &Confirm) {
         }
     };
     let width = 76;
-    // Wrapping at words takes more lines than the characters alone, so leave room to spare. The
-    // keys sit on the border, where a long text can't push them out of view.
+    // The keys sit on the border, where text too long for the screen can't push them out of view.
     let wrapped: usize = lines
         .iter()
-        .map(|line| (line.width() + 10).div_ceil(usize::from(width) - 2))
+        .map(|line| wrapped_lines(line, usize::from(width) - 2))
         .sum();
     let popup = centered(area, width, wrapped as u16 + 2);
     let text: Vec<Line> = lines.into_iter().map(Line::raw).collect();
@@ -653,6 +652,32 @@ fn draw_confirm(frame: &mut Frame, app: &App, area: Rect, confirm: &Confirm) {
         Paragraph::new(text).wrap(Wrap { trim: false }).block(block),
         popup,
     );
+}
+
+/// How many lines `text` takes when wrapped at spaces to `width` columns, with a word too long
+/// for a line split across lines, as a wrapping `Paragraph` draws it.
+pub(super) fn wrapped_lines(text: &str, width: usize) -> usize {
+    let width = width.max(1);
+    let words = text.trim_start_matches(' ');
+    // An indent stays on the first line.
+    let (mut lines, mut used) = (1, text.len() - words.len());
+    for (i, word) in words.split(' ').enumerate() {
+        let mut word_width = word.width();
+        let gap = usize::from(i > 0);
+        if used + gap + word_width <= width {
+            used += gap + word_width;
+            continue;
+        }
+        if used > 0 {
+            lines += 1;
+        }
+        while word_width > width {
+            lines += 1;
+            word_width -= width;
+        }
+        used = word_width;
+    }
+    lines
 }
 
 /// `path` with the home directory written as `~`.
