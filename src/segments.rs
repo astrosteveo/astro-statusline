@@ -27,6 +27,70 @@ pub enum Kind {
     Cost,
 }
 
+/// An entry of a row: a segment, or `fill`, which pushes what follows it to the right edge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Item {
+    Segment(Kind),
+    Fill,
+}
+
+impl Item {
+    /// Every segment on one row, the default layout.
+    pub const ALL: [Item; 7] = [
+        Item::Segment(Kind::Model),
+        Item::Segment(Kind::Directory),
+        Item::Segment(Kind::Branch),
+        Item::Segment(Kind::Context),
+        Item::Segment(Kind::FiveHour),
+        Item::Segment(Kind::SevenDay),
+        Item::Segment(Kind::Cost),
+    ];
+
+    pub fn kind(self) -> Option<Kind> {
+        match self {
+            Item::Segment(kind) => Some(kind),
+            Item::Fill => None,
+        }
+    }
+
+    /// The entry's name in the config file.
+    pub fn name(self) -> &'static str {
+        self.kind().map_or("fill", Kind::name)
+    }
+
+    /// The entry the config file calls `name`.
+    pub fn from_name(name: &str) -> Option<Item> {
+        match name {
+            "fill" => Some(Item::Fill),
+            name => Kind::from_name(name).map(Item::Segment),
+        }
+    }
+}
+
+/// An entry is equal to a segment when it's that segment, so rows compare with lists of segments.
+impl PartialEq<Kind> for Item {
+    fn eq(&self, kind: &Kind) -> bool {
+        *self == Item::Segment(*kind)
+    }
+}
+
+impl<'de> Deserialize<'de> for Item {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        const NAMES: [&str; 8] = [
+            "model",
+            "directory",
+            "branch",
+            "context",
+            "five_hour",
+            "seven_day",
+            "cost",
+            "fill",
+        ];
+        let name = String::deserialize(deserializer)?;
+        Item::from_name(&name).ok_or_else(|| serde::de::Error::unknown_variant(&name, &NAMES))
+    }
+}
+
 impl Kind {
     /// Every segment, in the default display order.
     pub const ALL: [Kind; 7] = [
@@ -122,27 +186,32 @@ pub fn lines(env: &Env, columns: Option<usize>, color: bool) -> Vec<String> {
     let config = env.config;
     let max_width = columns.map(|columns| render::max_width(columns, config.padding));
     config
-        .rows()
+        .layout()
         .into_iter()
         .enumerate()
-        .map(|(index, kinds)| {
-            render::render(
-                row(env, kinds),
+        .map(|(index, items)| {
+            let (left, right) = match items.iter().position(|&item| item == Item::Fill) {
+                Some(fill) => (&items[..fill], Some(&items[fill + 1..])),
+                None => (items, None),
+            };
+            render::render_row(
+                row(env, left),
+                right.map(|right| row(env, right)),
                 config.format.separator.row(index),
                 &config.colors.separator,
                 max_width,
                 color,
             )
         })
-        .filter(|line| !line.is_empty())
+        .filter(|line| !line.trim().is_empty())
         .collect()
 }
 
-/// The segments of one row, in its order.
-pub fn row(env: &Env, kinds: &[Kind]) -> Vec<Segment> {
-    kinds
+/// The segments of `items`, in order.
+fn row(env: &Env, items: &[Item]) -> Vec<Segment> {
+    items
         .iter()
-        .filter_map(|&kind| segment(kind, env))
+        .filter_map(|item| segment(item.kind()?, env))
         .collect()
 }
 
@@ -339,9 +408,9 @@ mod tests {
     /// Every row's segments, in order.
     fn all(env: &Env) -> Vec<Segment> {
         env.config
-            .rows()
+            .layout()
             .into_iter()
-            .flat_map(|kinds| row(env, kinds))
+            .flat_map(|items| row(env, items))
             .collect()
     }
 
@@ -401,7 +470,7 @@ mod tests {
         };
         *field = kind.parse_template(template).unwrap();
         Config {
-            segments: Some(vec![kind]),
+            segments: Some(vec![Item::Segment(kind)]),
             format,
             ..Config::default()
         }
@@ -434,7 +503,11 @@ mod tests {
     #[test]
     fn follows_the_configured_order_and_colors() {
         let config = Config {
-            segments: Some(vec![Kind::Cost, Kind::Context, Kind::Model]),
+            segments: Some(
+                [Kind::Cost, Kind::Context, Kind::Model]
+                    .map(Item::Segment)
+                    .to_vec(),
+            ),
             colors: Colors {
                 model: style("bold #ff8700"),
                 usage_low: style("bright_green"),

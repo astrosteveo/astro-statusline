@@ -505,9 +505,10 @@ fn draw_layout(frame: &mut Frame, app: &App, area: Rect, focused: bool) {
                     (format!(" Row {} (empty)", row + 1), bold())
                 }
                 LayoutItem::Row(row) => (format!(" Row {}", row + 1), bold()),
-                LayoutItem::Segment { kind, .. } => {
-                    (format!("    {}", segment_label(kind)), Style::default())
-                }
+                LayoutItem::Segment { item, .. } => match item.kind() {
+                    Some(kind) => (format!("    {}", segment_label(kind)), Style::default()),
+                    None => ("    ── fill ──".to_string(), dim()),
+                },
                 LayoutItem::HiddenHeader => {
                     (" Not shown".to_string(), bold().add_modifier(Modifier::DIM))
                 }
@@ -614,7 +615,7 @@ fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
             "↑↓ choose  → open  s save  q quit  [ ] session  < > width"
         }
         (Mode::Normal, Focus::Detail, Section::Layout) => {
-            "↑↓ choose  J K move  n new row  d remove  enter open  r reset  ← back  s save"
+            "↑↓ choose  J K move  n new row  f fill  d remove  enter open  r reset  ← back  s save"
         }
         (Mode::Normal, Focus::Detail, Section::DropOrder) => {
             "↑↓ choose  J K move  r reset to default  ← back  s save  q quit"

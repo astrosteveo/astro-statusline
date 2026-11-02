@@ -159,6 +159,21 @@ fn draws_each_row_s_separator_and_keeps_the_padding_free() {
 }
 
 #[test]
+fn pushes_segments_after_a_fill_to_the_right_edge() {
+    let input = br#"{"model": {"display_name": "Opus"}, "cwd": "/home/me/project",
+        "cost": {"total_cost_usd": 1.5}}"#;
+    let config = "segments = [\"model\", \"directory\", \"fill\", \"cost\"]";
+    let draw = |columns: Option<&str>| {
+        let mut env = vec![("NO_COLOR", "1")];
+        env.extend(columns.map(|columns| ("COLUMNS", columns)));
+        run_with_config(Some(config), input, &env).stdout
+    };
+    // 34 columns leave 30: "Opus │ project" is 14 and "$1.50" is 5, so 11 spaces between.
+    assert_eq!(draw(Some("34")), "Opus │ project           $1.50\n");
+    assert_eq!(draw(None), "Opus │ project │ $1.50\n");
+}
+
+#[test]
 fn honors_no_color_and_columns() {
     let input = br#"{"model": {"display_name": "Opus"}, "cwd": "/home/me/project"}"#;
     assert_eq!(run(input, &[("NO_COLOR", "1")]).stdout, "Opus │ project\n");

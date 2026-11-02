@@ -103,6 +103,7 @@ impl Segment {
 
 /// Renders `segments` in order, joined by `separator` drawn in `separator_style`, no wider than
 /// `max_width` columns when it is given, with ANSI color when `color` is set.
+#[cfg(test)]
 pub fn render(
     segments: Vec<Segment>,
     separator: &str,
@@ -110,34 +111,72 @@ pub fn render(
     max_width: Option<usize>,
     color: bool,
 ) -> String {
-    let mut segments: Vec<Segment> = segments
-        .into_iter()
-        .map(Segment::cleaned)
-        .filter(|s| !s.pieces.is_empty())
-        .collect();
+    render_row(segments, None, separator, separator_style, max_width, color)
+}
+
+/// Renders a row as `render` does, with `right`, when there's a `fill`, pushed to the right edge of
+/// `max_width`. Both sides are fitted as one line, the fill counted as a separator, so the gap is
+/// never narrower than one. Without a `max_width` the fill is drawn as a separator.
+pub fn render_row(
+    left: Vec<Segment>,
+    right: Option<Vec<Segment>>,
+    separator: &str,
+    separator_style: &Style,
+    max_width: Option<usize>,
+    color: bool,
+) -> String {
+    let cleaned = |segments: Vec<Segment>| -> Vec<Segment> {
+        segments
+            .into_iter()
+            .map(Segment::cleaned)
+            .filter(|s| !s.pieces.is_empty())
+            .collect()
+    };
+    let mut segments = cleaned(left);
+    let mut boundary = segments.len();
+    let filled = right.is_some();
+    segments.extend(cleaned(right.unwrap_or_default()));
     let separator = strip_controls(separator);
+    let separator_width = separator.width();
     if let Some(max_width) = max_width {
-        fit(&mut segments, separator.width(), max_width);
+        fit(&mut segments, separator_width, max_width, &mut boundary);
     }
 
     let separator = paint(&separator, separator_style, color);
-    segments
-        .iter()
-        .map(|s| {
-            s.pieces
-                .iter()
-                .map(|piece| paint(&piece.text, &piece.style, color))
-                .collect::<String>()
-        })
-        .collect::<Vec<_>>()
-        .join(&separator)
+    let join = |segments: &[Segment]| {
+        segments
+            .iter()
+            .map(|s| {
+                s.pieces
+                    .iter()
+                    .map(|piece| paint(&piece.text, &piece.style, color))
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join(&separator)
+    };
+    let (left, right) = segments.split_at(boundary);
+    match max_width {
+        Some(max_width) if filled && !right.is_empty() => {
+            let used = line_width(left, separator_width) + line_width(right, separator_width);
+            let gap = " ".repeat(max_width.saturating_sub(used));
+            format!("{}{gap}{}", join(left), join(right))
+        }
+        _ => join(&segments),
+    }
 }
 
 fn strip_controls(text: &str) -> String {
     text.chars().filter(|c| !c.is_control()).collect()
 }
 
-fn fit(segments: &mut Vec<Segment>, separator_width: usize, max_width: usize) {
+/// Drops segments until the line fits, keeping `boundary`, the index of a fill, in place.
+fn fit(
+    segments: &mut Vec<Segment>,
+    separator_width: usize,
+    max_width: usize,
+    boundary: &mut usize,
+) {
     while segments.len() > 1 && line_width(segments, separator_width) > max_width {
         // `min_by_key` keeps the first minimum, so walking backwards drops the rightmost of a tie.
         if let Some((index, _)) = segments
@@ -147,6 +186,9 @@ fn fit(segments: &mut Vec<Segment>, separator_width: usize, max_width: usize) {
             .min_by_key(|(_, s)| s.priority)
         {
             segments.remove(index);
+            if index < *boundary {
+                *boundary -= 1;
+            }
         }
     }
     if let [only] = segments.as_mut_slice()
@@ -313,6 +355,46 @@ mod tests {
         // A segment of empty pieces is left out.
         let empty = pieces(&[("", "dim")]);
         assert_eq!(render(vec![empty, seg("x", 1)], None, false), "x");
+    }
+
+    #[test]
+    fn pushes_what_follows_a_fill_to_the_right_edge() {
+        let row = |left: Vec<Segment>, right: Vec<Segment>, max_width, color| {
+            super::render_row(left, Some(right), " │ ", &style("dim"), max_width, color)
+        };
+        let (a, b, c) = (seg("aaaa", 3), seg("bbbb", 2), seg("cc", 1));
+        assert_eq!(
+            row(vec![a.clone()], vec![b.clone()], Some(12), false),
+            "aaaa    bbbb"
+        );
+        // "aaaa │ cc" is 9 columns and "bbbb" 4, so 20 leave 7 between.
+        assert_eq!(
+            row(vec![a.clone(), c.clone()], vec![b.clone()], Some(20), false),
+            format!("aaaa │ cc{}bbbb", " ".repeat(7))
+        );
+        // At 16 the gap is exactly a separator's width. At 15 it would be narrower, so the lowest
+        // priority drops.
+        assert_eq!(
+            row(vec![a.clone(), c.clone()], vec![b.clone()], Some(16), false),
+            format!("aaaa │ cc{}bbbb", " ".repeat(3))
+        );
+        assert_eq!(
+            row(vec![a.clone(), c.clone()], vec![b.clone()], Some(15), false),
+            format!("aaaa{}bbbb", " ".repeat(7))
+        );
+        // Without a width to fill, the fill is a separator.
+        assert_eq!(
+            row(vec![a.clone()], vec![b.clone()], None, false),
+            "aaaa │ bbbb"
+        );
+        // Nothing on the left: the right side sits at the edge. Nothing on the right: no padding.
+        assert_eq!(row(vec![], vec![b.clone()], Some(8), false), "    bbbb");
+        assert_eq!(row(vec![a.clone()], vec![], Some(8), false), "aaaa");
+        // The padding is plain, outside any color.
+        assert_eq!(
+            row(vec![a], vec![b], Some(11), true),
+            "\x1b[36maaaa\x1b[0m   \x1b[36mbbbb\x1b[0m"
+        );
     }
 
     #[test]

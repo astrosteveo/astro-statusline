@@ -12,7 +12,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::dirs;
 use crate::history;
-use crate::segments::Kind;
+use crate::segments::{Item, Kind};
 use crate::style::Style;
 use crate::template::Template;
 
@@ -22,6 +22,7 @@ pub const DEFAULTS: &str = r##"# The segments to show, left to right. Leave one 
 segments = ["model", "directory", "branch", "context", "five_hour", "seven_day", "cost"]
 # Or several rows, top to bottom, instead of segments:
 # lines = [["model", "directory", "branch"], ["context", "five_hour", "seven_day", "cost"]]
+# "fill" in a row pushes the segments after it to the right edge.
 
 # Segments that drop first when a row is too wide, in this order. The rest drop in the default
 # order: cost, seven_day, five_hour, branch, directory, model, and context last.
@@ -85,9 +86,9 @@ chars = "▁▂▃▄▅▆▇█"
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
     /// One row of segments, left to right.
-    pub segments: Option<Vec<Kind>>,
+    pub segments: Option<Vec<Item>>,
     /// Several rows, each a list of segments, top to bottom. Set this or `segments`, not both.
-    pub lines: Option<Vec<Vec<Kind>>>,
+    pub lines: Option<Vec<Vec<Item>>>,
     /// Segments that drop first on a narrow terminal, in this order, ahead of the rest.
     pub drop_order: Vec<Kind>,
     /// The `padding` in Claude Code's status line settings, which takes that many columns at each
@@ -429,11 +430,19 @@ pub struct Graph {
 impl Config {
     /// The rows of segments to show, top to bottom. With neither `segments` nor `lines` set, that's
     /// every segment on one row.
-    pub fn rows(&self) -> Vec<&[Kind]> {
+    pub fn rows(&self) -> Vec<Vec<Kind>> {
+        self.layout()
+            .into_iter()
+            .map(|row| row.iter().filter_map(|item| item.kind()).collect())
+            .collect()
+    }
+
+    /// The rows to draw, top to bottom, with any `fill` in them.
+    pub fn layout(&self) -> Vec<&[Item]> {
         match (&self.segments, &self.lines) {
             (Some(segments), _) => vec![segments],
             (None, Some(lines)) => lines.iter().map(Vec::as_slice).collect(),
-            (None, None) => vec![&Kind::ALL],
+            (None, None) => vec![&Item::ALL],
         }
     }
 
@@ -456,16 +465,13 @@ impl Config {
 
     /// Whether any row shows `kind`.
     pub fn shows(&self, kind: Kind) -> bool {
-        self.rows()
-            .into_iter()
-            .flatten()
-            .any(|&shown| shown == kind)
+        self.rows().into_iter().flatten().any(|shown| shown == kind)
     }
 
     /// Whether any segment shown needs the session's history: for a graph, or for the context
     /// segment's fill prediction.
     pub fn needs_history(&self) -> bool {
-        self.rows().into_iter().flatten().any(|&kind| {
+        self.rows().into_iter().flatten().any(|kind| {
             let template = self.format.template(kind);
             template.uses("graph") || (kind == Kind::Context && template.uses("eta"))
         })
@@ -677,6 +683,13 @@ pub fn parse(text: &str) -> Result<Config, String> {
         return Err("set segments or lines, not both".to_string());
     }
     check_drop_order(&config.drop_order)?;
+    if config
+        .layout()
+        .iter()
+        .any(|row| row.iter().filter(|item| **item == Item::Fill).count() > 1)
+    {
+        return Err("a row has more than one fill".to_string());
+    }
     Ok(config)
 }
 
@@ -803,6 +816,16 @@ mod tests {
     #[test]
     fn lays_segments_out_in_rows() {
         assert_eq!(Config::default().rows(), [Kind::ALL]);
+        let filled = parse("segments = [\"model\", \"fill\", \"cost\"]").unwrap();
+        assert_eq!(filled.rows(), [[Kind::Model, Kind::Cost]]);
+        assert_eq!(
+            filled.layout(),
+            [[
+                Item::Segment(Kind::Model),
+                Item::Fill,
+                Item::Segment(Kind::Cost)
+            ]]
+        );
         let config = parse("lines = [[\"model\", \"branch\"], [], [\"cost\"]]").unwrap();
         assert_eq!(
             config.rows(),
@@ -895,6 +918,20 @@ mod tests {
                 "usage is only for the context and rate-limit",
             ),
             ("format.cost = \"{usd:purple}\"", "unknown style \"purple\""),
+            (
+                "segments = [\"model\", \"fill\", \"cost\", \"fill\"]",
+                "a row has more than one fill",
+            ),
+            (
+                "lines = [[\"fill\", \"fill\"]]",
+                "a row has more than one fill",
+            ),
+            (
+                "segments = [\"git\"]",
+                "expected one of `model`, `directory`",
+            ),
+            ("segments = [\"git\"]", "`cost`, `fill`"),
+            ("drop_order = [\"fill\"]", "unknown variant `fill`"),
             ("max_width.git = 5", "unknown field `git`"),
             ("max_width.branch = 0", "max_width 0 isn't from 1 to 500"),
             (

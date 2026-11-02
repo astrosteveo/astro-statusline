@@ -16,7 +16,7 @@ use std::process::ExitCode;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use crate::config::{self, Config, Thresholds};
-use crate::segments::Kind;
+use crate::segments::{Item, Kind};
 use crate::style::{COLORS, Color, Ink, Style};
 use doc::{Doc, Field};
 use preview::SCENARIOS;
@@ -150,32 +150,37 @@ impl Section {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LayoutItem {
     Row(usize),
+    /// A segment or a fill, in a row.
     Segment {
         row: usize,
         index: usize,
-        kind: Kind,
+        item: Item,
     },
     HiddenHeader,
     Hidden(Kind),
 }
 
-fn layout_items(rows: &[Vec<Kind>]) -> Vec<LayoutItem> {
+fn layout_items(rows: &[Vec<Item>]) -> Vec<LayoutItem> {
     let mut items = Vec::new();
-    for (row, kinds) in rows.iter().enumerate() {
+    for (row, entries) in rows.iter().enumerate() {
         items.push(LayoutItem::Row(row));
         items.extend(
-            kinds
+            entries
                 .iter()
                 .enumerate()
-                .map(|(index, &kind)| LayoutItem::Segment { row, index, kind }),
+                .map(|(index, &item)| LayoutItem::Segment { row, index, item }),
         );
     }
     items.push(LayoutItem::HiddenHeader);
-    let shown = |kind: &Kind| rows.iter().flatten().any(|shown| shown == kind);
+    let shown = |kind: Kind| {
+        rows.iter()
+            .flatten()
+            .any(|&item| item == Item::Segment(kind))
+    };
     items.extend(
         Kind::ALL
             .into_iter()
-            .filter(|kind| !shown(kind))
+            .filter(|&kind| !shown(kind))
             .map(LayoutItem::Hidden),
     );
     items
@@ -721,13 +726,19 @@ impl App {
                 }
                 LayoutItem::HiddenHeader | LayoutItem::Hidden(_) => return,
             },
+            KeyCode::Char('f') => toggle_fill(&mut rows, item),
             KeyCode::Char('r') => {
                 self.doc.reset_rows();
                 self.cursor = 0;
                 return;
             }
             KeyCode::Enter => {
-                if let LayoutItem::Segment { kind, .. } | LayoutItem::Hidden(kind) = item {
+                let kind = match item {
+                    LayoutItem::Segment { item, .. } => item.kind(),
+                    LayoutItem::Hidden(kind) => Some(kind),
+                    LayoutItem::Row(_) | LayoutItem::HiddenHeader => None,
+                };
+                if let Some(kind) = kind {
                     self.section = SECTIONS
                         .iter()
                         .position(|section| *section == Section::Segment(kind))
@@ -875,66 +886,84 @@ impl App {
     }
 }
 
-/// Moves a segment one place up: within its row, to the end of the row above, or from the hidden
-/// list to the end of the last row.
-fn move_up(rows: &mut Vec<Vec<Kind>>, item: LayoutItem) -> Option<LayoutItem> {
-    match item {
-        LayoutItem::Segment { row, index, kind } if index > 0 => {
+/// Moves a segment or fill one place up: within its row, or to the end of the row above. A segment
+/// in the hidden list goes to the end of the last row. A fill doesn't move into a row that has one.
+fn move_up(rows: &mut Vec<Vec<Item>>, entry: LayoutItem) -> Option<LayoutItem> {
+    match entry {
+        LayoutItem::Segment { row, index, item } if index > 0 => {
             rows[row].swap(index, index - 1);
-            Some(LayoutItem::Segment {
-                row,
-                index: index - 1,
-                kind,
-            })
+            let index = index - 1;
+            Some(LayoutItem::Segment { row, index, item })
         }
-        LayoutItem::Segment { row, index, kind } if row > 0 => {
+        LayoutItem::Segment { row, index, item } if row > 0 => {
+            if item == Item::Fill && rows[row - 1].contains(&Item::Fill) {
+                return None;
+            }
             rows[row].remove(index);
-            rows[row - 1].push(kind);
-            let index = rows[row - 1].len() - 1;
-            Some(LayoutItem::Segment {
-                row: row - 1,
-                index,
-                kind,
-            })
+            rows[row - 1].push(item);
+            let (row, index) = (row - 1, rows[row - 1].len() - 1);
+            Some(LayoutItem::Segment { row, index, item })
         }
         LayoutItem::Hidden(kind) => {
             if rows.is_empty() {
                 rows.push(Vec::new());
             }
             let row = rows.len() - 1;
-            rows[row].push(kind);
+            rows[row].push(Item::Segment(kind));
             let index = rows[row].len() - 1;
-            Some(LayoutItem::Segment { row, index, kind })
+            let item = Item::Segment(kind);
+            Some(LayoutItem::Segment { row, index, item })
         }
         _ => None,
     }
 }
 
-/// Moves a segment one place down: within its row, to the start of the row below, or off the
-/// last row into the hidden list.
-fn move_down(rows: &mut [Vec<Kind>], item: LayoutItem) -> Option<LayoutItem> {
-    let LayoutItem::Segment { row, index, kind } = item else {
+/// Moves a segment or fill one place down: within its row, or to the start of the row below. Off
+/// the last row, a segment goes to the hidden list and a fill goes away.
+fn move_down(rows: &mut [Vec<Item>], entry: LayoutItem) -> Option<LayoutItem> {
+    let LayoutItem::Segment { row, index, item } = entry else {
         return None;
     };
     if index + 1 < rows[row].len() {
         rows[row].swap(index, index + 1);
-        return Some(LayoutItem::Segment {
-            row,
-            index: index + 1,
-            kind,
-        });
+        let index = index + 1;
+        return Some(LayoutItem::Segment { row, index, item });
+    }
+    if row + 1 < rows.len() {
+        if item == Item::Fill && rows[row + 1].contains(&Item::Fill) {
+            return None;
+        }
+        rows[row].remove(index);
+        rows[row + 1].insert(0, item);
+        let (row, index) = (row + 1, 0);
+        return Some(LayoutItem::Segment { row, index, item });
     }
     rows[row].remove(index);
-    if row + 1 < rows.len() {
-        rows[row + 1].insert(0, kind);
-        Some(LayoutItem::Segment {
-            row: row + 1,
-            index: 0,
-            kind,
-        })
-    } else {
-        Some(LayoutItem::Hidden(kind))
+    match item {
+        Item::Segment(kind) => Some(LayoutItem::Hidden(kind)),
+        Item::Fill => None,
     }
+}
+
+/// Adds a fill after `entry` in its row, or at the start of a row when `entry` is the row, or takes
+/// the row's fill out when it has one.
+fn toggle_fill(rows: &mut [Vec<Item>], entry: LayoutItem) -> Option<LayoutItem> {
+    let (row, at) = match entry {
+        LayoutItem::Row(row) => (row, 0),
+        LayoutItem::Segment { row, index, .. } => (row, index + 1),
+        LayoutItem::HiddenHeader | LayoutItem::Hidden(_) => return None,
+    };
+    if let Some(fill) = rows[row].iter().position(|&item| item == Item::Fill) {
+        rows[row].remove(fill);
+        return None;
+    }
+    rows[row].insert(at, Item::Fill);
+    let item = Item::Fill;
+    Some(LayoutItem::Segment {
+        row,
+        index: at,
+        item,
+    })
 }
 
 /// Whether two layout items are the same line, comparing where a segment is rather than which.

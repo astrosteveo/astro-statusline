@@ -291,6 +291,39 @@ fn arranges_segments_into_rows() {
 }
 
 #[test]
+fn adds_moves_and_removes_a_fill() {
+    let mut f = Fixture::new(Some("segments = [\"model\", \"directory\", \"cost\"]\n"));
+    f.open(Section::Layout);
+    // After the directory.
+    f.press(&[KeyCode::Down, KeyCode::Down]).typing("f");
+    assert_eq!(
+        f.app.doc.text(),
+        "segments = [\"model\", \"directory\", \"fill\", \"cost\"]\n"
+    );
+    assert!(f.screen(100, 30).contains("── fill ──"));
+    // The preview stands in for 98 columns, so the line gets 94 after Claude Code's 2 at each
+    // edge: after the border and 2 columns, it ends at column 96 with the cost.
+    let screen = f.screen(100, 30);
+    let line: Vec<char> = screen.lines().nth(1).unwrap().chars().collect();
+    let text: String = line[3..97].iter().collect();
+    assert!(
+        text.starts_with("Opus 5.5 │ my-project ") && text.ends_with(" $1.23"),
+        "{text}"
+    );
+    // Up past the directory, then off the row's end, where it goes away.
+    f.typing("K");
+    assert_eq!(f.app.doc.rows()[0][1], Item::Fill);
+    f.typing("JJJ");
+    assert_eq!(
+        f.app.doc.rows(),
+        [[Kind::Model, Kind::Directory, Kind::Cost]]
+    );
+    // f on a row with a fill takes it out.
+    f.press(&[KeyCode::Up, KeyCode::Up]).typing("ff");
+    assert!(!f.app.doc.text().contains("fill"));
+}
+
+#[test]
 fn opens_a_segment_from_the_layout() {
     let mut f = Fixture::new(None);
     f.open(Section::Layout)

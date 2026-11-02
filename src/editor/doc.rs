@@ -7,7 +7,7 @@ use std::sync::LazyLock;
 use toml_edit::{Array, DocumentMut, Item, Key, Table, TableLike, Value};
 
 use crate::config::{self, Config, DEFAULTS};
-use crate::segments::Kind;
+use crate::segments::{Item as Entry, Kind};
 use crate::style::Style;
 
 static DEFAULT_DOC: LazyLock<DocumentMut> =
@@ -287,14 +287,14 @@ impl Doc {
         }
     }
 
-    /// The rows the file lays out, top to bottom, leaving out names that aren't segments. With
-    /// neither `segments` nor `lines`, that's every segment on one row.
-    pub fn rows(&self) -> Vec<Vec<Kind>> {
-        let kinds = |value: &Value| -> Vec<Kind> {
+    /// The rows the file lays out, top to bottom, leaving out names that aren't segments or a
+    /// fill. With neither `segments` nor `lines`, that's every segment on one row.
+    pub fn rows(&self) -> Vec<Vec<Entry>> {
+        let kinds = |value: &Value| -> Vec<Entry> {
             value.as_array().map_or_else(Vec::new, |array| {
                 array
                     .iter()
-                    .filter_map(|name| name.as_str().and_then(Kind::from_name))
+                    .filter_map(|name| name.as_str().and_then(Entry::from_name))
                     .collect()
             })
         };
@@ -305,12 +305,12 @@ impl Doc {
         if let Some(lines) = root.get("lines").and_then(Item::as_array) {
             return lines.iter().map(kinds).collect();
         }
-        vec![Kind::ALL.to_vec()]
+        vec![Entry::ALL.to_vec()]
     }
 
     /// Writes `rows` as `segments` when there is one and the file doesn't use `lines`, otherwise
     /// as `lines`, one row to a line. Comments above the key it replaces stay.
-    pub fn set_rows(&mut self, rows: &[Vec<Kind>]) {
+    pub fn set_rows(&mut self, rows: &[Vec<Entry>]) {
         let root = self.0.as_table_mut();
         let as_lines =
             rows.len() != 1 || (root.contains_key("lines") && !root.contains_key("segments"));
@@ -383,7 +383,7 @@ impl Doc {
             root.remove("drop_order");
             return;
         }
-        let value = Value::Array(names(&sequence[..listed]));
+        let value = Value::Array(sequence[..listed].iter().map(|kind| kind.name()).collect());
         match root.get_mut("drop_order") {
             Some(Item::Value(old)) => {
                 let decor = old.decor().clone();
@@ -432,11 +432,11 @@ fn table_mut<'d>(doc: &'d mut DocumentMut, name: &str) -> &'d mut dyn TableLike 
         .expect("the table was just made")
 }
 
-fn names(row: &[Kind]) -> Array {
-    row.iter().map(|kind| kind.name()).collect()
+fn names(row: &[Entry]) -> Array {
+    row.iter().map(|entry| entry.name()).collect()
 }
 
-fn lines_value(rows: &[Vec<Kind>]) -> Value {
+fn lines_value(rows: &[Vec<Entry>]) -> Value {
     let mut array = Array::new();
     for row in rows {
         let mut row = Value::Array(names(row));
@@ -456,6 +456,28 @@ mod tests {
 
     fn doc(text: &str) -> Doc {
         Doc::parse(text).unwrap()
+    }
+
+    /// Rows of segments as rows of entries.
+    fn items(rows: &[&[Kind]]) -> Vec<Vec<Entry>> {
+        rows.iter()
+            .map(|row| row.iter().map(|&kind| Entry::Segment(kind)).collect())
+            .collect()
+    }
+
+    #[test]
+    fn reads_and_writes_a_fill() {
+        let mut doc = doc("segments = [\"model\", \"fill\", \"cost\"]\n");
+        assert_eq!(
+            doc.rows(),
+            [[
+                Entry::Segment(Kind::Model),
+                Entry::Fill,
+                Entry::Segment(Kind::Cost)
+            ]]
+        );
+        doc.set_rows(&[vec![Entry::Fill, Entry::Segment(Kind::Cost)]]);
+        assert_eq!(doc.text(), "segments = [\"fill\", \"cost\"]\n");
     }
 
     #[test]
@@ -588,13 +610,13 @@ mod tests {
             doc("# Which segments.\nsegments = [\"model\"]\n\n[colors]\nmodel = \"cyan\"\n");
         assert_eq!(doc.rows(), [[Kind::Model]]);
 
-        doc.set_rows(&[vec![Kind::Model, Kind::Cost]]);
+        doc.set_rows(&items(&[&[Kind::Model, Kind::Cost]]));
         assert_eq!(
             doc.text(),
             "# Which segments.\nsegments = [\"model\", \"cost\"]\n\n[colors]\nmodel = \"cyan\"\n"
         );
 
-        let rows = [vec![Kind::Model, Kind::Branch], vec![], vec![Kind::Cost]];
+        let rows = items(&[&[Kind::Model, Kind::Branch], &[], &[Kind::Cost]]);
         doc.set_rows(&rows);
         assert_eq!(
             doc.text(),
@@ -604,7 +626,7 @@ mod tests {
         assert_eq!(config::parse(&doc.text()).unwrap().rows().len(), 3);
 
         // A file that uses `lines` keeps it for one row.
-        doc.set_rows(&[vec![Kind::Context]]);
+        doc.set_rows(&items(&[&[Kind::Context]]));
         assert!(
             doc.text().contains("lines = [\n  [\"context\"],\n]"),
             "{}",
@@ -613,7 +635,7 @@ mod tests {
 
         doc.set_rows(&[]);
         assert!(doc.text().contains("lines = []"));
-        assert_eq!(doc.rows(), Vec::<Vec<Kind>>::new());
+        assert_eq!(doc.rows(), Vec::<Vec<Entry>>::new());
 
         doc.reset_rows();
         assert_eq!(doc.rows(), [Kind::ALL]);

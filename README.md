@@ -81,6 +81,7 @@ Every key is optional. These are the defaults:
 segments = ["model", "directory", "branch", "context", "five_hour", "seven_day", "cost"]
 # Or several rows, top to bottom, instead of segments:
 # lines = [["model", "directory", "branch"], ["context", "five_hour", "seven_day", "cost"]]
+# "fill" in a row pushes the segments after it to the right edge.
 
 # Segments that drop first when a row is too wide, in this order. The rest drop in the default
 # order: cost, seven_day, five_hour, branch, directory, model, and context last.
@@ -247,6 +248,18 @@ ctx ████░░░░ 58% ▂▃▃▃▄▄▅▅ full in 16m · 5h 71% 
 ```
 
 A row with nothing to show is left out, so the second row appears with the first response.
+
+`"fill"` in a row pushes the segments after it to the right edge, with spaces between, as the line
+can be no wider than the terminal less Claude Code's edges and `padding`:
+
+```toml
+segments = ["model", "directory", "branch", "fill", "context", "cost"]
+```
+
+A row has at most one fill. When it's too wide, the fill counts as a separator, so the two sides
+never touch. Without `COLUMNS` the fill is drawn as a separator. Claude Code shows notifications on
+the status line's row and cuts its right end to make room for them, so a filled row loses its right
+side first while a notification shows.
 
 ### History
 
