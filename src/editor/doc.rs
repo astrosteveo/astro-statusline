@@ -215,8 +215,14 @@ fn lookup<'d>(doc: &'d DocumentMut, table: &str, key: &str) -> Option<&'d Item> 
 
 /// A value as the editor shows it: a string's contents, or the TOML of anything else.
 fn text_of(item: &Item) -> String {
-    match item.as_str() {
-        Some(text) => text.to_string(),
+    match item.as_value() {
+        Some(Value::String(text)) => text.value().clone(),
+        Some(value) => {
+            // A value's decor holds the spaces and any comment around it.
+            let mut value = value.clone();
+            value.decor_mut().clear();
+            value.to_string()
+        }
         None => item.to_string().trim().to_string(),
     }
 }
@@ -272,6 +278,13 @@ mod tests {
             "5h {percent}"
         );
         assert_eq!(doc.get(Field::Separator).text, " │ ");
+    }
+
+    #[test]
+    fn reads_a_number_without_the_comment_after_it() {
+        let doc = doc("[bar]\nwidth = 6  # six cells\n");
+        let shown = doc.get(Field::BarWidth);
+        assert_eq!((shown.text.as_str(), shown.error), ("6", None));
     }
 
     #[test]
