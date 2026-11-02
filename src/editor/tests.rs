@@ -271,6 +271,17 @@ fn opens_a_segment_from_the_layout() {
 }
 
 #[test]
+fn scrolls_the_settings_list_to_the_chosen_section() {
+    // Two rows of preview leave less room for the list.
+    let mut f = Fixture::new(Some("lines = [[\"model\"], [\"cost\"]]\n"));
+    f.press(&[KeyCode::Down; SECTIONS.len()]);
+    assert_eq!(f.app.section(), Section::ClaudeCode);
+    // The smallest terminal the editor draws in.
+    let screen = f.screen(72, 20);
+    assert!(screen.contains("│ Claude Code"), "{screen}");
+}
+
+#[test]
 fn reorders_what_drops_first() {
     let mut f = Fixture::new(Some("segments = [\"model\", \"directory\", \"cost\"]\n"));
     f.open(Section::DropOrder);

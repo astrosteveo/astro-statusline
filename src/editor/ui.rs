@@ -199,7 +199,15 @@ fn draw_sections(frame: &mut Frame, app: &App, area: Rect) {
     let block = Block::bordered()
         .title(" Settings ")
         .border_style(if focused { bold() } else { dim() });
-    frame.render_widget(Paragraph::new(lines).block(block), area);
+    // Scrolls so the chosen section stays in view.
+    let height = usize::from(block.inner(area).height);
+    let offset = app.section.saturating_sub(height.saturating_sub(1));
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(block)
+            .scroll((offset as u16, 0)),
+        area,
+    );
 }
 
 fn draw_detail(frame: &mut Frame, app: &App, area: Rect) {
