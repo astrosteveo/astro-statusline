@@ -19,7 +19,8 @@ can add bars, graphs, predictions, and more rows.
 cargo install --path .
 ```
 
-Then point Claude Code at it in `~/.claude/settings.json`:
+Then point Claude Code at it in `~/.claude/settings.json` (or `$CLAUDE_CONFIG_DIR/settings.json`). The
+[editor](#edit-in-the-terminal) can do this for you, or add it by hand:
 
 ```json
 {
@@ -34,6 +35,39 @@ Then point Claude Code at it in `~/.claude/settings.json`:
 Claude Code re-runs the command after events like a new message, but not when the terminal is resized.
 `refreshInterval` also re-runs it every second, the shortest interval Claude Code allows, so the line
 fits again within a second of a resize. A run takes about half a millisecond.
+
+## Edit in the terminal
+
+```sh
+astro-statusline config
+```
+
+opens a full-screen editor for the [config file](#configure), with the status line drawn at the top as
+Claude Code would show it, by the same code. The preview changes as you type, before anything is saved.
+
+- **Preview**: `[` and `]` switch between sample sessions: mid-session, a fresh session, near the
+  limits, without a subscription (no rate limits), a detached `HEAD`, and outside git. `<` and `>` set
+  the terminal width it stands in for, marked with `┊`, to see what drops on a narrow terminal. Glyphs
+  that terminals draw at different widths, such as Nerd Font icons, are flagged under it.
+- **Settings**: pick a group on the left and press Enter to edit a key on the right. A template lists
+  its placeholders, and Tab inserts one. A value with a mistake shows what's wrong and isn't kept until
+  it's fixed. A style opens a picker: arrow keys choose from the 256 colors, `b` `d` `i` `u` turn
+  attributes on and off, `x` clears the color, and `t` types any style, such as `#ff8700`. `r` takes a
+  key out of the file, back to its default.
+- **Layout**: `J` and `K` (or Shift and an arrow) move a segment within its row, to the next row, or
+  into "Not shown". `n` adds a row and `d` removes a row or a segment.
+- **Saving** (`s`) changes only what you edited: comments, key order, and formatting stay. A config
+  that's a symlink, as dotfile managers make, is written through to its target. The previous file is
+  kept as `config.toml.bak`. If the file changed on disk since the editor read it, it asks before
+  overwriting. A read-only file, such as one Nix home-manager makes, isn't touched: the editor offers to
+  print the TOML when you quit instead. Quitting (`q`) with unsaved changes asks first.
+- **Claude Code**: when its settings don't run astro-statusline, this sets `statusLine` to run the
+  program you started the editor with, every second. It shows what changes first, keeps every other
+  setting, and keeps the previous file as `settings.json.bak`.
+
+A config that isn't valid TOML at all can't be edited key by key, so the editor says where the mistake
+is and doesn't open. A config with another kind of mistake, such as an unknown color, opens with the
+mistake shown, and saving waits until it's fixed.
 
 ## Configure
 
