@@ -3,16 +3,20 @@
 A status line for [Claude Code](https://code.claude.com/docs/en/statusline), written in Rust.
 
 ```text
-Opus 5.5 │ astro-statusline │ main │ ctx 63% │ 5h 12% │ 7d 85% │ $1.23
+Opus 5.5 │ astro-statusline │ main │ ctx 63% │ 7d 85% │ $1.23
 ```
 
 From left to right: the model, the current directory, the git branch, how full the context window is,
-how much of the 5-hour and 7-day rate limits you've used, and the session's estimated cost. Percentages
-are green below 50%, yellow below 80%, and red from 80% up, unless the config moves those points. A
-segment is left out until Claude Code sends its data. For example, rate limits appear only for
-claude.ai subscribers, after the first response.
+how much of the 7-day rate limit you've used, and the session's estimated cost. Percentages are green
+below 50%, yellow below 80%, and red from 80% up, unless the config moves those points. A segment is
+left out until Claude Code sends its data. For example, rate limits appear only for claude.ai
+subscribers, after the first response.
 A [config file](#configure) changes which segments show and in what order, their colors and text, and
 can add bars, graphs, predictions, and more rows.
+
+The 5-hour limit has a segment too, `five_hour`. It isn't in the default layout while Claude Code
+doesn't send a 5-hour limit. To show it when it does, add `"five_hour"` to `segments` in the config
+file, or under Layout in `astro-statusline config`.
 
 ## Install
 
@@ -81,10 +85,11 @@ The config file is `~/.config/astro-statusline/config.toml`, or
 Every key is optional. These are the defaults:
 
 ```toml
-# The segments to show, left to right. Leave one out to hide it.
-segments = ["model", "directory", "branch", "context", "five_hour", "seven_day", "cost"]
+# The segments to show, left to right. Leave one out to hide it. five_hour, the 5-hour limit,
+# is left out while Claude Code doesn't send one; add it to show it again.
+segments = ["model", "directory", "branch", "context", "seven_day", "cost"]
 # Or several rows, top to bottom, instead of segments:
-# lines = [["model", "directory", "branch"], ["context", "five_hour", "seven_day", "cost"]]
+# lines = [["model", "directory", "branch"], ["context", "seven_day", "cost"]]
 # "fill" in a row pushes the segments after it to the right edge.
 
 # Segments that drop first when a row is too wide, in this order. The rest drop in the default
@@ -281,13 +286,12 @@ For example, two rows with bars, graphs, and predictions:
 ```toml
 lines = [
   ["model", "directory", "branch"],
-  ["context", "five_hour", "seven_day", "cost"],
+  ["context", "seven_day", "cost"],
 ]
 
 [format]
 separator = " · "
 context = "ctx {bar} {percent} {graph}[ full in {eta}]"
-five_hour = "5h {percent}[ ⚠ limit in {eta}][ resets {resets_in}]"
 seven_day = "7d {bar} {percent}[ ({delta})][ → {projected}]"
 cost = "{usd} {graph}[ ({rate}/h)]"
 
@@ -297,7 +301,7 @@ width = 8
 
 ```text
 Opus 5.5 · astro-statusline · main
-ctx ████░░░░ 58% ▂▃▃▃▄▄▅▅ full in 16m · 5h 71% ⚠ limit in 1h13m resets 2h · 7d ██░┃░░░░ 30% (-13%) → 70% · $1.23 ▃▆▄██▅▄ ($0.82/h)
+ctx ████░░░░ 58% ▂▃▃▃▄▄▅▅ full in 16m · 7d ██░┃░░░░ 30% (-13%) → 70% · $1.23 ▃▆▄██▅▄ ($0.82/h)
 ```
 
 A row with nothing to show is left out, so the second row appears with the first response.

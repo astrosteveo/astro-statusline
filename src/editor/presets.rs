@@ -34,7 +34,7 @@ pub const PRESETS: [Preset; 4] = [
 
 const PLAIN_ASCII: &str = r##"# astro-statusline: the Plain ASCII preset. Only ASCII characters, for fonts without box
 # drawing or block elements.
-segments = ["model", "directory", "branch", "context", "five_hour", "seven_day", "cost"]
+segments = ["model", "directory", "branch", "context", "seven_day", "cost"]
 
 [format]
 separator = " | "
@@ -54,7 +54,7 @@ const POWERLINE: &str = r##"# astro-statusline: the Powerline preset. Segments o
 # which need a Nerd Font.
 lines = [
   ["model", "directory", "fill", "branch"],
-  ["context", "five_hour", "seven_day", "cost"],
+  ["context", "seven_day", "cost"],
 ]
 
 [colors]
@@ -62,6 +62,7 @@ model = "black on cyan"
 directory = "black on blue"
 branch = "black on magenta"
 context = "black on usage"
+# For five_hour, the 5-hour limit, if you add it to lines.
 five_hour = "black on usage"
 seven_day = "black on usage"
 cost = "white on 238"
@@ -74,6 +75,7 @@ model = " {name} "
 directory = " {name} "
 branch = " \ue0a0 {branch} "
 context = " ctx {percent:bold black} "
+# For five_hour, if you add it to lines.
 five_hour = " 5h {percent:bold black} "
 seven_day = " 7d {percent:bold black} "
 cost = " {usd} "
@@ -82,12 +84,13 @@ cost = " {usd} "
 const DASHBOARD: &str = r##"# astro-statusline: the Dashboard preset. Two rows, with bars, graphs, and predictions.
 lines = [
   ["model", "directory", "branch"],
-  ["context", "five_hour", "seven_day", "cost"],
+  ["context", "seven_day", "cost"],
 ]
 
 [format]
 separator = " · "
 context = "ctx {bar} {percent} {graph}[ full in {eta}]"
+# For five_hour, the 5-hour limit, if you add it to lines.
 five_hour = "5h {bar} {percent}[ ({delta})][ ⚠ limit in {eta}][ resets {resets_in}]"
 seven_day = "7d {bar} {percent}[ ({delta})][ → {projected}]"
 cost = "{usd} {graph}[ ({rate}/h)]"
@@ -127,5 +130,28 @@ mod tests {
         let powerline = config::parse(POWERLINE).unwrap();
         assert_eq!(powerline.colors.separator, SeparatorStyle::Powerline);
         assert!(config::parse(DASHBOARD).unwrap().needs_history());
+    }
+
+    #[test]
+    fn no_preset_shows_the_5_hour_limit_but_each_keeps_its_look() {
+        use crate::segments::Kind;
+        for preset in &PRESETS {
+            let config = config::parse(preset.text).unwrap();
+            assert!(!config.shows(Kind::FiveHour), "{}", preset.name);
+        }
+        // Added back in Layout, the 5-hour limit takes the preset's look.
+        let powerline = config::parse(POWERLINE).unwrap();
+        assert_eq!(
+            powerline.colors.five_hour,
+            "black on usage".parse().unwrap()
+        );
+        assert_eq!(
+            powerline.format.five_hour,
+            Kind::FiveHour
+                .parse_template(" 5h {percent:bold black} ")
+                .unwrap()
+        );
+        let dashboard = config::parse(DASHBOARD).unwrap();
+        assert!(dashboard.format.five_hour.uses("eta"));
     }
 }

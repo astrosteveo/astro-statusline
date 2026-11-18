@@ -64,7 +64,7 @@ fn renders_a_colored_line_from_the_session() {
 }
 
 /// Every default segment, colored. Later changes to how segments are built must keep this line
-/// byte for byte.
+/// byte for byte. The input has a 5-hour limit, which the default layout leaves out.
 #[test]
 fn renders_every_default_segment_byte_for_byte() {
     let root = tempfile::tempdir().expect("create a repo dir");
@@ -91,7 +91,6 @@ fn renders_every_default_segment_byte_for_byte() {
         "\x1b[34mproj\x1b[0m",
         "\x1b[35mmain\x1b[0m",
         "\x1b[33mctx 63%\x1b[0m",
-        "\x1b[32m5h 12%\x1b[0m",
         "\x1b[31m7d 85%\x1b[0m",
         "\x1b[2m$1.23\x1b[0m",
     ]
@@ -107,17 +106,17 @@ fn renders_odd_values_byte_for_byte() {
     let input = br#"{
         "model": {"display_name": "O\u0007pus"},
         "context_window": {"used_percentage": -0.4},
-        "rate_limits": {"five_hour": {"used_percentage": 1e300}},
+        "rate_limits": {"seven_day": {"used_percentage": 1e300}},
         "cost": {"total_cost_usd": -1}
     }"#;
     let out = run(input, &[("NO_COLOR", "1")]);
     assert_eq!(
         out.stdout,
-        "Opus │ ctx 0% │ 5h 18446744073709551615% │ $-1.00\n"
+        "Opus │ ctx 0% │ 7d 18446744073709551615% │ $-1.00\n"
     );
     // 44 columns less the edge reserve is exactly the line without cost, the lowest priority.
     let out = run(input, &[("NO_COLOR", "1"), ("COLUMNS", "44")]);
-    assert_eq!(out.stdout, "Opus │ ctx 0% │ 5h 18446744073709551615%\n");
+    assert_eq!(out.stdout, "Opus │ ctx 0% │ 7d 18446744073709551615%\n");
 }
 
 #[test]

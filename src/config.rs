@@ -19,10 +19,11 @@ use crate::template::Template;
 
 /// Every key at its default, as the README documents them. The editor shows a key the file leaves
 /// out with its text from here.
-pub const DEFAULTS: &str = r##"# The segments to show, left to right. Leave one out to hide it.
-segments = ["model", "directory", "branch", "context", "five_hour", "seven_day", "cost"]
+pub const DEFAULTS: &str = r##"# The segments to show, left to right. Leave one out to hide it. five_hour, the 5-hour limit,
+# is left out while Claude Code doesn't send one; add it to show it again.
+segments = ["model", "directory", "branch", "context", "seven_day", "cost"]
 # Or several rows, top to bottom, instead of segments:
-# lines = [["model", "directory", "branch"], ["context", "five_hour", "seven_day", "cost"]]
+# lines = [["model", "directory", "branch"], ["context", "seven_day", "cost"]]
 # "fill" in a row pushes the segments after it to the right edge.
 
 # Segments that drop first when a row is too wide, in this order. The rest drop in the default
@@ -514,7 +515,7 @@ pub struct Graph {
 
 impl Config {
     /// The rows of segments to show, top to bottom. With neither `segments` nor `lines` set, that's
-    /// every segment on one row.
+    /// the default layout, `Item::DEFAULT`.
     pub fn rows(&self) -> Vec<Vec<Kind>> {
         self.layout()
             .into_iter()
@@ -527,7 +528,7 @@ impl Config {
         match (&self.segments, &self.lines) {
             (Some(segments), _) => vec![segments],
             (None, Some(lines)) => lines.iter().map(Vec::as_slice).collect(),
-            (None, None) => vec![&Item::ALL],
+            (None, None) => vec![&Item::DEFAULT],
         }
     }
 
@@ -933,7 +934,11 @@ mod tests {
 
     #[test]
     fn lays_segments_out_in_rows() {
-        assert_eq!(Config::default().rows(), [Kind::ALL]);
+        use Kind::*;
+        assert_eq!(
+            Config::default().rows(),
+            [[Model, Directory, Branch, Context, SevenDay, Cost]]
+        );
         let filled = parse("segments = [\"model\", \"fill\", \"cost\"]").unwrap();
         assert_eq!(filled.rows(), [[Kind::Model, Kind::Cost]]);
         assert_eq!(

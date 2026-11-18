@@ -314,7 +314,7 @@ impl Doc {
         if let Some(lines) = root.get("lines").and_then(Item::as_array) {
             return lines.iter().map(kinds).collect();
         }
-        vec![Entry::ALL.to_vec()]
+        vec![Entry::DEFAULT.to_vec()]
     }
 
     /// Writes `rows` as `segments` when there is one and the file doesn't use `lines`, otherwise
@@ -647,12 +647,12 @@ mod tests {
         assert_eq!(doc.rows(), Vec::<Vec<Entry>>::new());
 
         doc.reset_rows();
-        assert_eq!(doc.rows(), [Kind::ALL]);
+        assert_eq!(doc.rows(), [Entry::DEFAULT]);
     }
 
     #[test]
     fn reads_rows_leniently() {
-        assert_eq!(Doc::parse("").unwrap().rows(), [Kind::ALL]);
+        assert_eq!(Doc::parse("").unwrap().rows(), [Entry::DEFAULT]);
         let doc = doc("lines = [[\"model\", \"git\"], \"cost\"]");
         assert_eq!(doc.rows(), [vec![Kind::Model], vec![]]);
     }

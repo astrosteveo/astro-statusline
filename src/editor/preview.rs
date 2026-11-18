@@ -236,8 +236,11 @@ mod tests {
 
     #[test]
     fn draws_what_each_session_has() {
+        // The 5-hour limit isn't in the default layout, but the sessions have it for a config that
+        // adds it back.
         let config = config::parse(
-            "format.five_hour = \"5h {percent}[ ⚠ {eta}]\"\nformat.context = \"ctx {percent} {graph}\"",
+            "segments = [\"model\", \"directory\", \"branch\", \"context\", \"five_hour\", \"seven_day\", \"cost\"]\n\
+             format.five_hour = \"5h {percent}[ ⚠ {eta}]\"\nformat.context = \"ctx {percent} {graph}\"",
         )
         .unwrap();
         let line = |index: usize| {
