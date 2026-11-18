@@ -72,6 +72,12 @@ five_hour = "5h {percent}"
 seven_day = "7d {percent}"
 cost = "{usd}"
 
+[directory]
+# How the directory segment's {name} shows the current directory: "name" for its last part,
+# "path" for all of it, "home" for the path with ~ for your home directory, "relative" for the
+# path from the directory Claude Code started in, or "last 2" for its last 2 parts.
+mode = "name"
+
 [bar]
 width = 10
 full = "█"
@@ -101,8 +107,59 @@ pub struct Config {
     pub show_from: ShowFrom,
     pub max_width: MaxWidth,
     pub format: Format,
+    pub directory: Directory,
     pub bar: Bar,
     pub graph: Graph,
+}
+
+/// How the directory segment shows the current directory.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Directory {
+    #[serde(deserialize_with = "directory_mode")]
+    pub mode: DirectoryMode,
+}
+
+/// What the directory segment's `{name}` draws.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum DirectoryMode {
+    /// The last part of the path.
+    #[default]
+    Name,
+    /// The whole path.
+    Path,
+    /// The path with `~` for the home directory.
+    Home,
+    /// The path from `workspace.project_dir`.
+    Relative,
+    /// The last parts of the path, this many of them, from 1 up.
+    Last(usize),
+}
+
+fn directory_mode<'de, D: Deserializer<'de>>(deserializer: D) -> Result<DirectoryMode, D::Error> {
+    parse_directory_mode(&String::deserialize(deserializer)?).map_err(de::Error::custom)
+}
+
+/// Reads `[directory] mode`.
+pub fn parse_directory_mode(text: &str) -> Result<DirectoryMode, String> {
+    let lower = text.trim().to_ascii_lowercase();
+    let words: Vec<&str> = lower.split_whitespace().collect();
+    match words[..] {
+        ["name"] => return Ok(DirectoryMode::Name),
+        ["path"] => return Ok(DirectoryMode::Path),
+        ["home"] => return Ok(DirectoryMode::Home),
+        ["relative"] => return Ok(DirectoryMode::Relative),
+        ["last", count] => {
+            if let Some(count) = count.parse().ok().filter(|&count: &usize| count >= 1) {
+                return Ok(DirectoryMode::Last(count));
+            }
+        }
+        _ => {}
+    }
+    Err(format!(
+        "directory mode {text:?} isn't \"name\", \"path\", \"home\", \"relative\", or \"last\" \
+         and a number from 1 up, such as \"last 2\""
+    ))
 }
 
 /// The most columns each segment may take; a longer one is cut short with an ellipsis. A segment
@@ -776,6 +833,19 @@ mod tests {
     }
 
     #[test]
+    fn reads_each_directory_mode() {
+        let mode =
+            |text: &str| parse(&format!("directory.mode = {text:?}")).map(|c| c.directory.mode);
+        assert_eq!(Config::default().directory.mode, DirectoryMode::Name);
+        assert_eq!(mode("name"), Ok(DirectoryMode::Name));
+        assert_eq!(mode("path"), Ok(DirectoryMode::Path));
+        assert_eq!(mode("home"), Ok(DirectoryMode::Home));
+        assert_eq!(mode("relative"), Ok(DirectoryMode::Relative));
+        assert_eq!(mode("last 1"), Ok(DirectoryMode::Last(1)));
+        assert_eq!(mode(" Last  12 "), Ok(DirectoryMode::Last(12)));
+    }
+
+    #[test]
     fn reads_thresholds_per_segment() {
         let config = parse("thresholds.context = [60, 85]\nthresholds.seven_day = [0, 0]").unwrap();
         assert_eq!(config.thresholds.get(Kind::Context), Some([60, 85]));
@@ -1021,6 +1091,21 @@ mod tests {
             ),
             ("thresholds.context = [50.5, 80]", "invalid type"),
             ("thresholds.context = 50", "invalid type"),
+            (
+                "directory.mode = \"lats 2\"",
+                "directory mode \"lats 2\" isn't",
+            ),
+            (
+                "directory.mode = \"last 0\"",
+                "directory mode \"last 0\" isn't",
+            ),
+            ("directory.mode = \"last\"", "such as \"last 2\""),
+            ("directory.mode = \"last -1\"", "a number from 1 up"),
+            ("directory.mode = \"last 2.5\"", "directory mode"),
+            ("directory.mode = \"name path\"", "directory mode"),
+            ("directory.mode = \"\"", "directory mode \"\" isn't"),
+            ("directory.mode = 2", "invalid type"),
+            ("directory.style = \"name\"", "unknown field `style`"),
         ];
         for (text, expected) in cases {
             let error = parse(text).unwrap_err();

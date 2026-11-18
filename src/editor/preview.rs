@@ -1,5 +1,7 @@
 //! The status line as Claude Code would show it, drawn by the same code from sample sessions.
 
+use std::path::Path;
+
 use ratatui::style::{Color, Modifier, Style as TuiStyle};
 use ratatui::text::{Line, Span};
 
@@ -21,7 +23,7 @@ pub struct Scenario {
 const MID_SESSION: &str = r#"{
     "session_id": "preview",
     "model": {"display_name": "Opus 5.5"},
-    "workspace": {"current_dir": "/home/you/my-project"},
+    "workspace": {"current_dir": "/home/you/my-project", "project_dir": "/home/you/my-project"},
     "context_window": {"used_percentage": 42, "total_input_tokens": 84000, "context_window_size": 200000},
     "rate_limits": {
         "five_hour": {"used_percentage": 35, "resets_at": 1800007200},
@@ -33,7 +35,7 @@ const MID_SESSION: &str = r#"{
 const FRESH: &str = r#"{
     "session_id": "preview",
     "model": {"display_name": "Opus 5.5"},
-    "workspace": {"current_dir": "/home/you/my-project"},
+    "workspace": {"current_dir": "/home/you/my-project", "project_dir": "/home/you/my-project"},
     "context_window": {"used_percentage": null, "context_window_size": 200000},
     "cost": {"total_cost_usd": 0, "total_duration_ms": 4000}
 }"#;
@@ -41,7 +43,7 @@ const FRESH: &str = r#"{
 const NEAR_THE_LIMITS: &str = r#"{
     "session_id": "preview",
     "model": {"display_name": "Opus 5.5"},
-    "workspace": {"current_dir": "/home/you/my-project"},
+    "workspace": {"current_dir": "/home/you/my-project", "project_dir": "/home/you/my-project"},
     "context_window": {"used_percentage": 91, "total_input_tokens": 182000, "context_window_size": 200000},
     "rate_limits": {
         "five_hour": {"used_percentage": 96, "resets_at": 1800001800},
@@ -53,7 +55,7 @@ const NEAR_THE_LIMITS: &str = r#"{
 const NO_SUBSCRIPTION: &str = r#"{
     "session_id": "preview",
     "model": {"display_name": "Opus 5.5"},
-    "workspace": {"current_dir": "/home/you/my-project"},
+    "workspace": {"current_dir": "/home/you/my-project", "project_dir": "/home/you/my-project"},
     "context_window": {"used_percentage": 30, "total_input_tokens": 60000, "context_window_size": 200000},
     "cost": {"total_cost_usd": 3.4, "total_duration_ms": 7200000}
 }"#;
@@ -102,6 +104,8 @@ pub fn lines(config: &Config, scenario: &Scenario, columns: usize) -> Vec<String
         now: Some(NOW),
         history: &history,
         branch: scenario.branch,
+        // The sample sessions are in this home, wherever the editor runs.
+        home: Some(Path::new("/home/you")),
     };
     segments::lines(&env, Some(columns), true)
 }

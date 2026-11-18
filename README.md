@@ -134,6 +134,12 @@ five_hour = "5h {percent}"
 seven_day = "7d {percent}"
 cost = "{usd}"
 
+[directory]
+# How the directory segment's {name} shows the current directory: "name" for its last part,
+# "path" for all of it, "home" for the path with ~ for your home directory, "relative" for the
+# path from the directory Claude Code started in, or "last 2" for its last 2 parts.
+mode = "name"
+
 [bar]
 width = 10
 full = "█"
@@ -215,7 +221,7 @@ they come and go:
 | Segment | Placeholders |
 |---|---|
 | `model` | `{name}` |
-| `directory` | `{name}` |
+| `directory` | `{name}`, as `[directory] mode` shows it |
 | `branch` | `{branch}` |
 | `context` | `{percent}` `{bar}` `{graph}` `{eta}` `{tokens}` `{size}` |
 | `five_hour`, `seven_day` | `{percent}` `{bar}` `{graph}` `{resets_in}` `{projected}` `{eta}` `{target}` `{delta}` |
@@ -250,6 +256,25 @@ rounding, so `seven_day = 24` still hides 23.5%, which shows as `24%`.
 
 `[max_width]` cuts a segment to a number of columns, ending in `…`, wherever it is and however wide
 the terminal: `branch = 20` draws `feat/a-very-long-br…` for a long branch.
+
+`[directory] mode` sets what the directory segment's `{name}` shows. With the current directory
+`/home/me/proj/crates/core/src`, Claude Code started in `/home/me/proj`, and the home directory
+`/home/me`:
+
+| `mode` | Shows |
+|---|---|
+| `"name"`, the default | `src` |
+| `"path"` | `/home/me/proj/crates/core/src` |
+| `"home"` | `~/proj/crates/core/src` |
+| `"relative"` | `crates/core/src` |
+| `"last 2"` | `core/src` |
+
+- `"relative"` counts from `workspace.project_dir`, the directory Claude Code was started in. In
+  that directory itself it shows the directory's name, `proj`. Outside it, or when Claude Code
+  doesn't send it, it shows what `"home"` shows.
+- `"home"` takes the home directory from `HOME`, or from your user account when `HOME` is unset or
+  empty. Outside the home directory it shows the full path.
+- `"last N"` takes any number from 1 up. A path with N parts or fewer shows in full, from the `/`.
 
 For example, two rows with bars, graphs, and predictions:
 
