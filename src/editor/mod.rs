@@ -124,6 +124,9 @@ impl Section {
                 if !matches!(kind, Kind::Model | Kind::Directory | Kind::Branch) {
                     fields.push(Field::ShowFrom(kind));
                 }
+                if kind == Kind::Directory {
+                    fields.push(Field::DirectoryMode);
+                }
                 fields.push(Field::MaxWidth(kind));
                 fields
             }
