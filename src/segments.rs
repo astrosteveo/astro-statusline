@@ -1,9 +1,12 @@
 //! The segments of the status line. Each is left out when the session lacks the data it is about,
 //! whatever its format template says, and otherwise drawn from that template.
 
+use std::ffi::OsStr;
+use std::path::{Component, Path, PathBuf};
+
 use serde::Deserialize;
 
-use crate::config::{Colors, Config};
+use crate::config::{Colors, Config, DirectoryMode};
 use crate::graph::{self, Scale};
 use crate::history::Sample;
 use crate::predict;
@@ -178,6 +181,8 @@ pub struct Env<'a> {
     pub history: &'a [Sample],
     /// The checked-out branch, or `None` outside a repository or when no row shows it.
     pub branch: Option<&'a str>,
+    /// The user's home directory, which the directory segment shows as `~`.
+    pub home: Option<&'a Path>,
 }
 
 /// Each row of the status line, top to bottom, fitted to a terminal `columns` wide when that's
@@ -228,9 +233,14 @@ fn segment(kind: Kind, env: &Env) -> Option<Segment> {
             (text?, None)
         }
         Kind::Directory => {
-            let name = session.current_dir()?.file_name()?.to_string_lossy();
+            let name = directory(
+                config.directory.mode,
+                session.current_dir()?,
+                session.project_dir(),
+                env.home,
+            )?;
             let text = format.directory.render(|key| match key {
-                "name" => Some(name.to_string()),
+                "name" => Some(name.clone()),
                 _ => None,
             });
             (text?, None)
@@ -321,6 +331,62 @@ fn segment(kind: Kind, env: &Env) -> Option<Segment> {
             .capped(config.max_width.get(kind))
             .on(base.background_color()),
     )
+}
+
+/// The directory `dir` as `mode` shows it, or `None` when that's empty, as the name of `/` is.
+/// `project` is the directory Claude Code was started in, and `home` the user's home.
+fn directory(
+    mode: DirectoryMode,
+    dir: &Path,
+    project: Option<&Path>,
+    home: Option<&Path>,
+) -> Option<String> {
+    let text = match mode {
+        DirectoryMode::Name => lossy(dir.file_name()?),
+        DirectoryMode::Path => lossy(dir.as_os_str()),
+        DirectoryMode::Home => with_home(dir, home),
+        DirectoryMode::Relative => {
+            let project = project.filter(|project| project.is_absolute());
+            match project.and_then(|project| dir.strip_prefix(project).ok()) {
+                // In the project directory itself, its name says more than `.` would.
+                Some(rest) if rest.as_os_str().is_empty() => {
+                    dir.file_name().map_or_else(|| with_home(dir, home), lossy)
+                }
+                Some(rest) => lossy(rest.as_os_str()),
+                // Outside the project, or without one, the path still says where this is.
+                None => with_home(dir, home),
+            }
+        }
+        DirectoryMode::Last(count) => {
+            let parts: Vec<Component> = dir
+                .components()
+                .filter(|part| !matches!(part, Component::RootDir | Component::Prefix(_)))
+                .collect();
+            match parts.len().checked_sub(count) {
+                Some(skip) if skip > 0 => {
+                    lossy(parts[skip..].iter().collect::<PathBuf>().as_os_str())
+                }
+                // No more parts than asked for: the whole path, from the root.
+                _ => lossy(dir.as_os_str()),
+            }
+        }
+    };
+    (!text.is_empty()).then_some(text)
+}
+
+/// `dir` with `~` for `home`, or in full outside it or without a home. A home of `/` or one that
+/// isn't absolute counts as none, as it does in bash's prompt, so `/tmp` doesn't read `~/tmp`.
+fn with_home(dir: &Path, home: Option<&Path>) -> String {
+    let home = home.filter(|home| home.is_absolute() && home.parent().is_some());
+    match home.and_then(|home| dir.strip_prefix(home).ok()) {
+        Some(rest) if rest.as_os_str().is_empty() => "~".to_string(),
+        Some(rest) => format!("~/{}", rest.to_string_lossy()),
+        None => lossy(dir.as_os_str()),
+    }
+}
+
+fn lossy(text: &OsStr) -> String {
+    text.to_string_lossy().into_owned()
 }
 
 /// The rate limit `kind` over a `window` seconds long, whose history `value` picks out of each
@@ -449,6 +515,7 @@ mod tests {
             now: Some(NOW),
             history: &[Sample::new(&session, NOW)],
             branch: None,
+            home: None,
         })
     }
 
@@ -555,6 +622,7 @@ mod tests {
                     now: Some(NOW),
                     history: &history,
                     branch: Some("main"),
+                    home: None,
                 };
                 assert!(!all(&env).is_empty(), "{kind:?} left {{{name}}} empty");
             }
@@ -635,6 +703,7 @@ mod tests {
                 now,
                 history: &[],
                 branch: None,
+                home: None,
             })
             .pop()
             .map(|s| s.text())
@@ -678,6 +747,7 @@ mod tests {
             now: Some(NOW),
             history: &history,
             branch: None,
+            home: None,
         });
         assert_eq!(segments[0].text(), "80% ▁▇");
     }
@@ -698,6 +768,7 @@ mod tests {
                 now: Some(NOW),
                 history,
                 branch: None,
+                home: None,
             })
             .remove(0)
             .text()
@@ -725,6 +796,123 @@ mod tests {
             text_with(Kind::Cost, "spent", r#"{"cost": {"total_cost_usd": 0}}"#).as_deref(),
             Some("spent")
         );
+    }
+
+    #[test]
+    fn shows_the_directory_in_each_mode() {
+        let input = r#"{"workspace": {"current_dir": "/home/me/proj/crates/core/src",
+                                      "project_dir": "/home/me/proj"}}"#;
+        let session = Session::parse(input.as_bytes());
+        let draw = |mode: &str| {
+            let config = crate::config::parse(&format!(
+                "segments = [\"directory\"]\ndirectory.mode = {mode:?}"
+            ))
+            .unwrap();
+            let env = Env {
+                session: &session,
+                config: &config,
+                now: Some(NOW),
+                history: &[],
+                branch: None,
+                home: Some(Path::new("/home/me")),
+            };
+            all(&env).pop().map(|s| s.text())
+        };
+        assert_eq!(draw("name").as_deref(), Some("src"));
+        assert_eq!(
+            draw("path").as_deref(),
+            Some("/home/me/proj/crates/core/src")
+        );
+        assert_eq!(draw("home").as_deref(), Some("~/proj/crates/core/src"));
+        assert_eq!(draw("last 2").as_deref(), Some("core/src"));
+        assert_eq!(draw("relative").as_deref(), Some("crates/core/src"));
+    }
+
+    #[test]
+    fn shows_the_directory_at_the_edges_of_each_mode() {
+        use DirectoryMode::{Home, Last, Name, Relative};
+        let home = Some(Path::new("/home/me"));
+        let show = |mode, dir: &str, project: Option<&str>, home: Option<&Path>| {
+            directory(mode, Path::new(dir), project.map(Path::new), home)
+        };
+        let shown = |mode, dir: &str, project: Option<&str>| show(mode, dir, project, home);
+        let proj = Some("/home/me/proj");
+
+        // The relative mode in the project directory, outside it, and without one.
+        assert_eq!(
+            shown(Relative, "/home/me/proj", proj).as_deref(),
+            Some("proj")
+        );
+        assert_eq!(
+            shown(Relative, "/home/me/other", proj).as_deref(),
+            Some("~/other")
+        );
+        assert_eq!(shown(Relative, "/tmp", proj).as_deref(), Some("/tmp"));
+        assert_eq!(
+            shown(Relative, "/home/me/proj/src", None).as_deref(),
+            Some("~/proj/src")
+        );
+        // `/home/me/project` isn't inside `/home/me/proj`.
+        assert_eq!(
+            shown(Relative, "/home/me/project", proj).as_deref(),
+            Some("~/project")
+        );
+        assert_eq!(shown(Relative, "/", Some("/")).as_deref(), Some("/"));
+        assert_eq!(
+            shown(Relative, "/home/me/a", Some("")).as_deref(),
+            Some("~/a")
+        );
+
+        // The home mode at home, beside it, and without a usable home.
+        assert_eq!(shown(Home, "/home/me", None).as_deref(), Some("~"));
+        assert_eq!(
+            shown(Home, "/home/meow", None).as_deref(),
+            Some("/home/meow")
+        );
+        for home in [
+            None,
+            Some(Path::new("/")),
+            Some(Path::new("me")),
+            Some(Path::new("")),
+        ] {
+            assert_eq!(
+                show(Home, "/home/me/proj", None, home).as_deref(),
+                Some("/home/me/proj"),
+                "{home:?}"
+            );
+        }
+        assert_eq!(
+            show(Home, "/home/me/proj", None, Some(Path::new("/home/me/"))).as_deref(),
+            Some("~/proj")
+        );
+
+        // The last parts, with no more parts than asked for.
+        assert_eq!(
+            shown(Last(1), "/home/me/proj", None).as_deref(),
+            Some("proj")
+        );
+        assert_eq!(
+            shown(Last(2), "/home/me/proj", None).as_deref(),
+            Some("me/proj")
+        );
+        assert_eq!(
+            shown(Last(3), "/home/me/proj", None).as_deref(),
+            Some("/home/me/proj")
+        );
+        assert_eq!(
+            shown(Last(5), "/home/me/proj", None).as_deref(),
+            Some("/home/me/proj")
+        );
+
+        // The root has no name, so the name mode leaves the segment out, as it always has.
+        assert_eq!(shown(Name, "/", None), None);
+        assert_eq!(shown(DirectoryMode::Path, "/", None).as_deref(), Some("/"));
+        assert_eq!(shown(Home, "/", None).as_deref(), Some("/"));
+        assert_eq!(shown(Last(2), "/", None).as_deref(), Some("/"));
+        // An empty directory leaves it out in every mode.
+        for mode in [Name, DirectoryMode::Path, Home, Relative, Last(1)] {
+            assert_eq!(shown(mode, "", proj), None, "{mode:?}");
+        }
     }
 
     #[test]
@@ -811,6 +999,7 @@ mod tests {
             now: Some(NOW),
             history: &[],
             branch: Some("feat/a-very-long-branch"),
+            home: None,
         };
         assert_eq!(lines(&env, None, false), ["Opus │ feat/a-very…"]);
         // A segment that fits is left whole.

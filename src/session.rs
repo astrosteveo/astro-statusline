@@ -39,6 +39,9 @@ pub struct Model {
 pub struct Workspace {
     #[serde(default, deserialize_with = "lenient")]
     pub current_dir: Option<PathBuf>,
+    /// The directory Claude Code was started in, which stays the same when the session `cd`s.
+    #[serde(default, deserialize_with = "lenient")]
+    pub project_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -97,6 +100,11 @@ impl Session {
             .and_then(|w| w.current_dir.as_deref())
             .or(self.cwd.as_deref())
     }
+
+    /// The directory Claude Code was started in, `workspace.project_dir`.
+    pub fn project_dir(&self) -> Option<&Path> {
+        self.workspace.as_ref()?.project_dir.as_deref()
+    }
 }
 
 /// Deserializes an optional field, reading a value of the wrong type (including `null`) as
@@ -123,6 +131,7 @@ mod tests {
                 "workspace": {"current_dir": "/home/me/project/src", "project_dir": "/home/me/project"}
             }"#,
         );
+        assert_eq!(session.project_dir(), Some(Path::new("/home/me/project")));
         assert_eq!(session.model.unwrap().display_name.as_deref(), Some("Opus"));
         assert_eq!(
             session.workspace.unwrap().current_dir,

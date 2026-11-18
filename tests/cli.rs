@@ -216,6 +216,19 @@ fn reads_segments_and_colors_from_the_config_file() {
 }
 
 #[test]
+fn shows_the_directory_from_the_home_in_the_home_mode() {
+    let config = "segments = [\"directory\"]\ndirectory.mode = \"home\"";
+    let input = br#"{"workspace": {"current_dir": "/home/me/proj/src"}}"#;
+    let shown = |home: &str| {
+        let out = run_with_config(Some(config), input, &[("NO_COLOR", "1"), ("HOME", home)]);
+        assert_eq!(out.stderr, "");
+        out.stdout
+    };
+    assert_eq!(shown("/home/me"), "~/proj/src\n");
+    assert_eq!(shown("/home/someone-else"), "/home/me/proj/src\n");
+}
+
+#[test]
 fn an_invalid_config_falls_back_to_the_defaults() {
     let input = br#"{"model": {"display_name": "Opus"}, "cwd": "/home/me/proj"}"#;
     for config in [

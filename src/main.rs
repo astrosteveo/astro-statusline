@@ -61,12 +61,15 @@ fn status_line() {
         .shows(Kind::Branch)
         .then(|| session.current_dir().and_then(git::head))
         .flatten();
+    // With `HOME` unset or empty, this reads the home from the user's account.
+    let home = env::home_dir();
     let env = Env {
         session: &session,
         config: &config,
         now,
         history: &history,
         branch: branch.as_deref(),
+        home: home.as_deref(),
     };
     let lines = segments::lines(&env, columns(), color_enabled());
 
