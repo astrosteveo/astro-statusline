@@ -292,6 +292,38 @@ fn picks_the_usage_color_only_where_there_is_one() {
 }
 
 #[test]
+fn lists_the_5_hour_limit_as_not_shown_and_adds_it_back() {
+    let mut f = Fixture::new(None);
+    f.open(Section::Layout);
+    let screen = f.screen(110, 30);
+    assert!(
+        screen.contains("Not shown") && screen.contains("    5-hour limit"),
+        "{screen}"
+    );
+    assert!(!screen.contains("5h 35%"), "{screen}");
+    // The row, its six segments, the Not shown header, then the 5-hour limit.
+    f.press(&[KeyCode::Down; 8]);
+    assert_eq!(
+        layout_items(&f.app.doc.rows())[f.app.cursor],
+        LayoutItem::Hidden(Kind::FiveHour)
+    );
+    f.typing("K");
+    assert_eq!(
+        f.app.doc.rows(),
+        [[
+            Kind::Model,
+            Kind::Directory,
+            Kind::Branch,
+            Kind::Context,
+            Kind::SevenDay,
+            Kind::Cost,
+            Kind::FiveHour
+        ]]
+    );
+    assert!(f.screen(110, 30).contains("$1.23 │ 5h 35%"));
+}
+
+#[test]
 fn arranges_segments_into_rows() {
     let mut f = Fixture::new(Some(
         "# Mine.\nsegments = [\"model\", \"directory\", \"cost\"]\n",
@@ -333,7 +365,7 @@ fn arranges_segments_into_rows() {
     assert!(f.screen(100, 30).contains("Not shown"));
     assert!(config::parse(&f.app.doc.text()).is_ok());
     f.typing("r");
-    assert_eq!(f.app.doc.rows(), [Kind::ALL]);
+    assert_eq!(f.app.doc.rows(), [Item::DEFAULT]);
 }
 
 #[test]
@@ -872,7 +904,7 @@ fn draws_the_preview_for_each_session_and_width() {
         screen.contains("Preview · Mid-session · 108 columns"),
         "{screen}"
     );
-    assert!(screen.contains("  Opus 5.5 │ my-project │ main │ ctx 42% │ 5h 35% │ 7d 18% │ $1.23"));
+    assert!(screen.contains("  Opus 5.5 │ my-project │ main │ ctx 42% │ 7d 18% │ $1.23 "));
     f.typing("]");
     assert!(f.screen(110, 30).contains("Fresh session"));
     f.typing("[[");

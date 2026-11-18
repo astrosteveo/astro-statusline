@@ -38,13 +38,13 @@ pub enum Item {
 }
 
 impl Item {
-    /// Every segment on one row, the default layout.
-    pub const ALL: [Item; 7] = [
+    /// The default layout: one row of every segment but the 5-hour limit, which Claude Code
+    /// doesn't send while 5-hour limits are gone. A config can still name `five_hour`.
+    pub const DEFAULT: [Item; 6] = [
         Item::Segment(Kind::Model),
         Item::Segment(Kind::Directory),
         Item::Segment(Kind::Branch),
         Item::Segment(Kind::Context),
-        Item::Segment(Kind::FiveHour),
         Item::Segment(Kind::SevenDay),
         Item::Segment(Kind::Cost),
     ];
@@ -569,10 +569,12 @@ mod tests {
 
     #[test]
     fn shows_each_documented_field_in_order() {
-        assert_eq!(
-            texts(FULL),
-            ["Opus", "proj", "ctx 8%", "5h 24%", "7d 41%", "$0.01"]
-        );
+        // The 5-hour limit is left out of the default layout, but still draws when a config names
+        // it.
+        assert_eq!(texts(FULL), ["Opus", "proj", "ctx 8%", "7d 41%", "$0.01"]);
+        let five_hour = crate::config::parse("segments = [\"five_hour\"]").unwrap();
+        let shown: Vec<String> = draw(FULL, &five_hour).iter().map(|s| s.text()).collect();
+        assert_eq!(shown, ["5h 24%"]);
     }
 
     #[test]
@@ -1046,7 +1048,8 @@ mod tests {
     #[test]
     fn shows_segments_only_from_their_value_up() {
         let config = crate::config::parse(
-            "show_from.context = 10\nshow_from.five_hour = 24\nshow_from.seven_day = 41.3\nshow_from.cost = 0.02",
+            "segments = [\"model\", \"directory\", \"context\", \"five_hour\", \"seven_day\", \"cost\"]\n\
+             show_from.context = 10\nshow_from.five_hour = 24\nshow_from.seven_day = 41.3\nshow_from.cost = 0.02",
         )
         .unwrap();
         let shown = |input: &str| -> Vec<String> {
@@ -1073,6 +1076,11 @@ mod tests {
                 five_hour: [0, 100],
                 seven_day: [30, 30],
             },
+            segments: Some(
+                [Kind::Context, Kind::FiveHour, Kind::SevenDay]
+                    .map(Item::Segment)
+                    .to_vec(),
+            ),
             ..Config::default()
         };
         let input = |context: u8, five_hour: u8, seven_day: u8| {
