@@ -34,6 +34,8 @@ pub enum Field {
     ShowFrom(Kind),
     /// A segment's `[max_width]`, which has no default.
     MaxWidth(Kind),
+    /// `[directory] mode`.
+    DirectoryMode,
 }
 
 /// The TOML type a field is written as.
@@ -63,6 +65,7 @@ impl Field {
             Field::Thresholds(kind) => ("thresholds", kind.name()),
             Field::ShowFrom(kind) => ("show_from", kind.name()),
             Field::MaxWidth(kind) => ("max_width", kind.name()),
+            Field::DirectoryMode => ("directory", "mode"),
         }
     }
 
@@ -97,6 +100,11 @@ impl Field {
                 } else {
                     Value::from(number)
                 });
+            }
+            Field::DirectoryMode => {
+                // Written as the config file spells it, so " Last  2" reads "last 2".
+                let mode = config::parse_directory_mode(text)?;
+                return Ok(Value::from(mode.to_string()));
             }
             Field::Template(kind) => kind.parse_template(text).map(drop),
             Field::Style("separator") => config::parse_separator_style(text).map(drop),

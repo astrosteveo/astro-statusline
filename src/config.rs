@@ -136,6 +136,19 @@ pub enum DirectoryMode {
     Last(usize),
 }
 
+impl std::fmt::Display for DirectoryMode {
+    /// The mode as `[directory] mode` writes it.
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            DirectoryMode::Name => f.write_str("name"),
+            DirectoryMode::Path => f.write_str("path"),
+            DirectoryMode::Home => f.write_str("home"),
+            DirectoryMode::Relative => f.write_str("relative"),
+            DirectoryMode::Last(count) => write!(f, "last {count}"),
+        }
+    }
+}
+
 fn directory_mode<'de, D: Deserializer<'de>>(deserializer: D) -> Result<DirectoryMode, D::Error> {
     parse_directory_mode(&String::deserialize(deserializer)?).map_err(de::Error::custom)
 }
@@ -843,6 +856,9 @@ mod tests {
         assert_eq!(mode("relative"), Ok(DirectoryMode::Relative));
         assert_eq!(mode("last 1"), Ok(DirectoryMode::Last(1)));
         assert_eq!(mode(" Last  12 "), Ok(DirectoryMode::Last(12)));
+        for text in ["name", "path", "home", "relative", "last 3"] {
+            assert_eq!(parse_directory_mode(text).unwrap().to_string(), text);
+        }
     }
 
     #[test]

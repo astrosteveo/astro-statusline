@@ -249,6 +249,7 @@ fn field_label(field: Field, rows: usize) -> String {
         Field::Padding => "Padding",
         Field::ShowFrom(_) => "Show from",
         Field::MaxWidth(_) => "Max width",
+        Field::DirectoryMode => "Mode",
         Field::BarWidth | Field::GraphWidth => "Width",
         Field::BarFull => "Full cell",
         Field::BarEmpty => "Empty cell",
@@ -365,6 +366,14 @@ fn draw_fields(frame: &mut Frame, app: &App, area: Rect, section: Section, focus
                     " Show from: the segment shows only from this many {unit} up. Leave it \
                      empty to always show it."
                 ),
+                dim(),
+            ));
+        }
+        if kind == Kind::Directory {
+            lines.push(Line::styled(
+                " Mode: what {name} shows. name: the directory's name. path: its full path. home: \
+                 the path with ~ for your home. relative: the path from where Claude Code \
+                 started. last 2: its last 2 parts, or any number.",
                 dim(),
             ));
         }

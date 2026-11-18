@@ -424,8 +424,8 @@ fn caps_a_segment_s_width() {
     let mut f = Fixture::new(None);
     f.open(Section::Segment(Kind::Directory));
     assert!(f.screen(110, 30).contains("Max width     no limit"));
-    // Template, style, max width.
-    f.press(&[KeyCode::Down, KeyCode::Down, KeyCode::Enter])
+    // Template, style, mode, max width.
+    f.press(&[KeyCode::Down, KeyCode::Down, KeyCode::Down, KeyCode::Enter])
         .typing("0");
     assert!(
         f.screen(110, 30)
@@ -436,6 +436,62 @@ fn caps_a_segment_s_width() {
         .press(&[KeyCode::Enter]);
     assert_eq!(f.app.doc.text(), "[max_width]\ndirectory = 5\n");
     assert!(f.screen(110, 30).contains("Opus 5.5 │ my-p… │ main"));
+}
+
+#[test]
+fn sets_how_the_directory_is_shown() {
+    let mut f = Fixture::new(None);
+    f.open(Section::Segment(Kind::Directory));
+    let screen = f.screen(110, 30);
+    assert!(
+        screen.contains("Mode          \"name\"  default"),
+        "{screen}"
+    );
+    assert!(screen.contains("Opus 5.5 │ my-project │ main"), "{screen}");
+    // Template, style, mode, with "name" in it to start.
+    f.press(&[KeyCode::Down, KeyCode::Down, KeyCode::Enter])
+        .press(&[KeyCode::Backspace; 4])
+        .typing("lats 2");
+    assert!(
+        f.screen(110, 30)
+            .contains("directory mode \"lats 2\" isn't \"name\"")
+    );
+    f.press(&[KeyCode::Backspace; 6])
+        .typing(" Home")
+        .press(&[KeyCode::Enter]);
+    assert_eq!(f.app.doc.text(), "[directory]\nmode = \"home\"\n");
+    let screen = f.screen(110, 30);
+    assert!(screen.contains("Mode          \"home\""), "{screen}");
+    assert!(
+        screen.contains("Opus 5.5 │ ~/my-project │ main"),
+        "{screen}"
+    );
+    // The other modes, as the preview draws them from /home/you/my-project.
+    for (mode, shown) in [
+        ("path", "/home/you/my-project"),
+        ("last 2", "you/my-project"),
+        ("relative", "my-project"),
+    ] {
+        f.press(&[KeyCode::Enter, KeyCode::End])
+            .press(&[KeyCode::Backspace; 8])
+            .typing(mode)
+            .press(&[KeyCode::Enter]);
+        assert_eq!(
+            f.app.doc.text(),
+            format!("[directory]\nmode = \"{mode}\"\n")
+        );
+        let screen = f.screen(110, 30);
+        assert!(
+            screen.contains(&format!("Opus 5.5 │ {shown} │ main")),
+            "{mode}: {screen}"
+        );
+    }
+    // Only the directory has a mode.
+    assert!(
+        !Section::Segment(Kind::Model)
+            .fields(1)
+            .contains(&Field::DirectoryMode)
+    );
 }
 
 #[test]
